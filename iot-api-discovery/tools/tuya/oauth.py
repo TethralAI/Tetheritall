@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict
+import requests
 
 
 def build_auth_url(client_id: str, redirect_uri: str, region: str = "us") -> str:
@@ -10,6 +11,12 @@ def build_auth_url(client_id: str, redirect_uri: str, region: str = "us") -> str
 
 
 def exchange_code_for_token(client_id: str, client_secret: str, code: str, redirect_uri: str) -> Dict:
-    # Placeholder: real Tuya OAuth2 exchange requires specific endpoints/signing
-    return {"error": "not_implemented"}
+    # Placeholder: Tuya OAuth varies by region/account; attempt a generic exchange endpoint
+    url = "https://openapi.tuyaus.com/v1.0/token?grant_type=1"
+    headers = {"client_id": client_id, "sign_method": "HMAC-SHA256"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        return r.json() if r.ok else {"error": r.text}
+    except Exception as exc:
+        return {"error": str(exc)}
 
