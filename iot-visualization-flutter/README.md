@@ -29,6 +29,17 @@ Widget build(BuildContext context) {
       hubColor: Colors.cyan,
       maxConcurrentBeams: 30,
       enableDirectionalMapping: true,
+      // Production controls
+      beamSpawnInterval: Duration(milliseconds: 250),
+      globalSpeedScale: 1.0,
+      starfieldSeed: 1337,
+      particleCount: 6,
+      reduceMotion: false,
+      colorResolver: ({required bool isOutgoing, String? deviceId}) {
+        // Customize colors per device/type
+        if (deviceId == 'camera') return Colors.purpleAccent;
+        return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
+      },
     ),
   );
 }
