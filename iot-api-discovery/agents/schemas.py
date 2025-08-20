@@ -19,6 +19,7 @@ class Endpoint(BaseModel):
     source: Optional[str] = None
     discovered_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
     description: Optional[str] = None
+    confidence: Optional[float] = None
 
 
 class AuthenticationMethod(BaseModel):
@@ -26,6 +27,7 @@ class AuthenticationMethod(BaseModel):
     details: Optional[Dict[str, Any]] = None
     source: Optional[str] = None
     discovered_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    confidence: Optional[float] = None
 
 
 class Example(BaseModel):
