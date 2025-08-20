@@ -50,7 +50,7 @@ class DataTransmissionVisualization extends StatefulWidget {
 }
 
 class _DataTransmissionVisualizationState extends State<DataTransmissionVisualization>
-    with SingleTickerProviderStateMixin
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver
     implements _Attachable {
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
@@ -74,6 +74,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _pulseController = AnimationController(
       vsync: this,
@@ -83,7 +84,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _pulseController.repeat(reverse: true);
 
     // Beam generation timer
-    _beamTimer = Timer.periodic(widget.beamSpawnInterval, (_) => _maybeSpawnBeam());
+    if (_shouldAutoSpawn) {
+      _beamTimer = Timer.periodic(_effectiveSpawnInterval, (_) => _maybeSpawnBeam());
+    }
 
     // Smooth ticker for updates
     _ticker = createTicker((elapsed) {
@@ -124,10 +127,16 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       oldWidget.controller?._detach(this);
       widget.controller?._attach(this);
     }
+
+    if (oldWidget.beamSpawnInterval != widget.beamSpawnInterval ||
+        oldWidget.reduceMotion != widget.reduceMotion) {
+      _restartBeamTimerIfNeeded();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulseController.dispose();
     _beamTimer?.cancel();
     _ticker?.dispose();
@@ -135,6 +144,21 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _iotService?.dispose();
     widget.controller?._detach(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final isActive = state == AppLifecycleState.resumed;
+    if (isActive) {
+      if (!(_ticker?.isActive ?? false)) {
+        _ticker?.start();
+      }
+      _restartBeamTimerIfNeeded();
+    } else {
+      _ticker?.stop();
+      _beamTimer?.cancel();
+      _beamTimer = null;
+    }
   }
 
   // Public integration points
@@ -198,6 +222,23 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _beams.removeWhere((b) => b.isComplete);
   }
 
+  bool get _shouldAutoSpawn => widgetAutoSpawn;
+
+  Duration get _effectiveSpawnInterval {
+    final multiplier = widget.reduceMotion ? 1.8 : 1.0;
+    return Duration(milliseconds: (widget.beamSpawnInterval.inMilliseconds * multiplier).round());
+  }
+
+  bool get widgetAutoSpawn => true; // default on; change to false to disable demo spawning
+
+  void _restartBeamTimerIfNeeded() {
+    _beamTimer?.cancel();
+    _beamTimer = null;
+    if (_shouldAutoSpawn) {
+      _beamTimer = Timer.periodic(_effectiveSpawnInterval, (_) => _maybeSpawnBeam());
+    }
+  }
+
   void _manualBurst() {
     for (int i = 0; i < 8; i++) {
       _spawnBeam(isOutgoing: i.isEven);
@@ -206,6 +247,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.maybeOf(context);
+    final platformReduce = mq?.disableAnimations ?? false;
+    final effectiveReduceMotion = widget.reduceMotion || platformReduce;
     final Color base = widget.hubColor ?? Colors.cyan;
     final Gradient hubGradient = RadialGradient(
       colors: [
@@ -233,7 +277,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
                   showStarfield: widget.enableStarfield,
                   deviceParticlesPhase: _phase,
                   particleCount: widget.particleCount,
-                  reduceMotion: widget.reduceMotion,
+                  reduceMotion: effectiveReduceMotion,
                 ),
               ),
             ),
