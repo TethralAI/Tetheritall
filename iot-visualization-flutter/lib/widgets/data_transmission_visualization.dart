@@ -41,6 +41,7 @@ class DataTransmissionVisualization extends StatefulWidget {
     this.performanceMode = PerformanceMode.normal,
     this.manualYawRadians,
     this.beamStyleResolver,
+    this.onStats,
   });
 
   final OnDataEvent? onDataEvent;
@@ -66,6 +67,7 @@ class DataTransmissionVisualization extends StatefulWidget {
   final PerformanceMode performanceMode;
   final double? manualYawRadians;
   final BeamStyle Function({required bool isOutgoing, String? deviceId})? beamStyleResolver;
+  final void Function({required int activeBeams, required double allowance01})? onStats;
 
   @override
   State<DataTransmissionVisualization> createState() => _DataTransmissionVisualizationState();
@@ -98,10 +100,12 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   bool _isVisible = true;
   final Map<String, DeviceLocation> _devicePositions = <String, DeviceLocation>{};
   double _dataAllowance01 = 1.0; // 0..1 user-adjusted allowance
+  bool _autoSpawnEnabledOverride;
 
   @override
   void initState() {
     super.initState();
+    _autoSpawnEnabledOverride = widget.autoSpawnEnabled;
     WidgetsBinding.instance.addObserver(this);
 
     _pulseController = AnimationController(
@@ -250,6 +254,12 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _restartBeamTimerIfNeeded();
   }
 
+  @override
+  void setAutoSpawnEnabled(bool enabled) {
+    _autoSpawnEnabledOverride = enabled;
+    _restartBeamTimerIfNeeded();
+  }
+
   void _maybeSpawnBeam() {
     final allowedMax = max(1, (widget.maxConcurrentBeams * (_dataAllowance01 * 0.9 + 0.1)).floor());
     if (_beams.length >= allowedMax) return;
@@ -317,6 +327,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       beam.progress += beam.speed * widget.globalSpeedScale * dtSeconds;
     }
     _beams.removeWhere((b) => b.isComplete);
+
+    // Stats callback
+    widget.onStats?.call(activeBeams: _beams.length, allowance01: _dataAllowance01);
   }
 
   double _smoothAngle(double old, double next, double alpha) {
@@ -345,7 +358,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     }
   }
 
-  bool get _shouldAutoSpawn => widget.autoSpawnEnabled;
+  bool get _shouldAutoSpawn => _autoSpawnEnabledOverride;
 
   Duration get _effectiveSpawnInterval {
     final multiplier = widget.reduceMotion ? 1.8 : 1.0;
