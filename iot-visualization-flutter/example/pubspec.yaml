@@ -1,0 +1,20 @@
+name: iot_visualization_example
+description: Example app for IoT Visualization widget
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.1.0 <4.0.0'
+  flutter: '>=3.13.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  iot_visualization:
+    path: ..
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

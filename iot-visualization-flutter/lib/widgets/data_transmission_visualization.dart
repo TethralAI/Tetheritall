@@ -4,12 +4,14 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import '../models/data_beam.dart';
 import '../models/device_location.dart';
 import '../services/iot_data_service.dart';
 import 'data_transmission_controller.dart';
 import 'data_visualization_painter.dart';
+import 'types.dart';
 
 typedef OnDataEvent = void Function(IoTDataEvent event);
 
@@ -29,6 +31,16 @@ class DataTransmissionVisualization extends StatefulWidget {
     this.particleCount = 6,
     this.reduceMotion = false,
     this.colorResolver,
+    this.autoSpawnEnabled = true,
+    this.targetFps = 60,
+    this.hubGradient,
+    this.presetTheme = VisualizationTheme.blue,
+    this.semanticsLabel,
+    this.particleSizeRange = const Size(1.6, 3.0),
+    this.particleBlurRadius = 3.0,
+    this.performanceMode = PerformanceMode.normal,
+    this.manualYawRadians,
+    this.beamStyleResolver,
   });
 
   final OnDataEvent? onDataEvent;
@@ -44,6 +56,16 @@ class DataTransmissionVisualization extends StatefulWidget {
   final int particleCount; // particles per beam
   final bool reduceMotion; // reduce energy and particle count
   final Color Function({required bool isOutgoing, String? deviceId})? colorResolver;
+  final bool autoSpawnEnabled;
+  final int targetFps; // 60 / 30
+  final Gradient? hubGradient;
+  final VisualizationTheme presetTheme;
+  final String? semanticsLabel;
+  final Size particleSizeRange;
+  final double particleBlurRadius;
+  final PerformanceMode performanceMode;
+  final double? manualYawRadians;
+  final BeamStyle Function({required bool isOutgoing, String? deviceId})? beamStyleResolver;
 
   @override
   State<DataTransmissionVisualization> createState() => _DataTransmissionVisualizationState();
@@ -70,6 +92,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   // Phase for particle animation
   double _phase = 0.0;
   int? _lastTickMs;
+  double _smoothedYaw = 0.0;
+  double _targetFrameIntervalMs = 1000 / 60;
+  bool _isVisible = true;
 
   @override
   void initState() {
@@ -103,7 +128,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     if (widget.enableDirectionalMapping) {
       _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
         // Simple mapping: compute yaw-like angle from X/Y components
-        _deviceYaw = atan2(event.y, event.x);
+        final raw = widget.manualYawRadians ?? atan2(event.y, event.x);
+        _deviceYaw = _smoothAngle(_deviceYaw, raw, 0.12);
       });
     }
 
@@ -118,7 +144,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       _accelSub = null;
       if (widget.enableDirectionalMapping) {
         _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
-          _deviceYaw = atan2(event.y, event.x);
+          final raw = widget.manualYawRadians ?? atan2(event.y, event.x);
+          _deviceYaw = _smoothAngle(_deviceYaw, raw, 0.12);
         });
       }
     }
@@ -131,6 +158,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     if (oldWidget.beamSpawnInterval != widget.beamSpawnInterval ||
         oldWidget.reduceMotion != widget.reduceMotion) {
       _restartBeamTimerIfNeeded();
+    }
+
+    if (oldWidget.targetFps != widget.targetFps) {
+      _targetFrameIntervalMs = 1000 / widget.targetFps.clamp(15, 120);
     }
   }
 
@@ -150,6 +181,22 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final isActive = state == AppLifecycleState.resumed;
     if (isActive) {
+      if (!(_ticker?.isActive ?? false)) {
+        _ticker?.start();
+      }
+      _restartBeamTimerIfNeeded();
+    } else {
+      _ticker?.stop();
+      _beamTimer?.cancel();
+      _beamTimer = null;
+    }
+  }
+
+  void _onVisibilityChanged(VisibilityInfo info) {
+    final nowVisible = info.visibleFraction > 0.0;
+    if (nowVisible == _isVisible) return;
+    _isVisible = nowVisible;
+    if (_isVisible) {
       if (!(_ticker?.isActive ?? false)) {
         _ticker?.start();
       }
@@ -199,8 +246,17 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
     final defaultOutgoing = const Color(0xFF00E5FF); // cyan
     final defaultIncoming = const Color(0xFFFFA726); // amber
-    final fallback = isOutgoing ? defaultOutgoing : defaultIncoming;
-    final beamColor = widget.colorResolver?.call(isOutgoing: isOutgoing, deviceId: deviceId) ?? fallback;
+    final fallbackColor = isOutgoing ? defaultOutgoing : defaultIncoming;
+
+    Color resolvedColor = widget.colorResolver?.call(isOutgoing: isOutgoing, deviceId: deviceId) ?? fallbackColor;
+    double widthScale = 1.0;
+    double glowIntensity = 1.0;
+    if (widget.beamStyleResolver != null) {
+      final style = widget.beamStyleResolver!(isOutgoing: isOutgoing, deviceId: deviceId);
+      resolvedColor = style.color;
+      widthScale = style.widthScale;
+      glowIntensity = style.glowIntensity;
+    }
 
     final beam = DataBeam(
       angleRadians: angle,
@@ -208,7 +264,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       intensity: intensity,
       // Aim for ~2s traverse: 0.5 progress/sec => 2s. Slight variance for realism.
       speed: 0.45 + _rand.nextDouble() * 0.15,
-      color: beamColor,
+      color: resolvedColor,
       deviceId: deviceId,
     );
 
@@ -216,10 +272,26 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   }
 
   void _advanceBeams(double dtSeconds) {
+    // Frame throttle
+    if (_lastTickMs != null) {
+      final ms = dtSeconds * 1000.0;
+      if (ms < _targetFrameIntervalMs * 0.7) {
+        // If we are ahead of budget, skip heavy work
+          // No-op; retaining simple flow for now
+      }
+    }
+
     for (final beam in _beams) {
       beam.progress += beam.speed * widget.globalSpeedScale * dtSeconds;
     }
     _beams.removeWhere((b) => b.isComplete);
+  }
+
+  double _smoothAngle(double old, double next, double alpha) {
+    const double twoPi = pi * 2;
+    double delta = (next - old) % twoPi;
+    if (delta > pi) delta -= twoPi;
+    return (old + alpha * delta) % twoPi;
   }
 
   bool get _shouldAutoSpawn => widgetAutoSpawn;
@@ -250,53 +322,77 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     final mq = MediaQuery.maybeOf(context);
     final platformReduce = mq?.disableAnimations ?? false;
     final effectiveReduceMotion = widget.reduceMotion || platformReduce;
-    final Color base = widget.hubColor ?? Colors.cyan;
-    final Gradient hubGradient = RadialGradient(
+    final Gradient hubGradient = widget.hubGradient ?? _themeToGradient(widget.presetTheme, widget.hubColor);
+
+    final semanticsText = widget.semanticsLabel ?? 'Real-time data visualization with ${_beams.length} active beams.';
+    return VisibilityDetector(
+      key: const ValueKey('iot-visualization-visibility'),
+      onVisibilityChanged: _onVisibilityChanged,
+      child: Stack(
+        children: [
+          Semantics(
+            label: semanticsText,
+            container: true,
+            child: RepaintBoundary(
+              child: SizedBox.expand(
+                child: CustomPaint(
+                  painter: DataVisualizationPainter(
+                    beams: List.unmodifiable(_beams),
+                    pulseValue: _pulseAnimation.value,
+                    hubGradient: hubGradient,
+                    starSeed: widget.starfieldSeed,
+                    showStarfield: widget.enableStarfield,
+                    deviceParticlesPhase: _phase,
+                    particleCount: widget.particleCount,
+                    reduceMotion: effectiveReduceMotion,
+                    particleSizeRange: widget.particleSizeRange,
+                    particleBlurRadius: widget.particleBlurRadius,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: Semantics(
+              label: 'Trigger data burst',
+              button: true,
+              child: FloatingActionButton(
+                onPressed: _manualBurst,
+                tooltip: 'Simulate data burst',
+                child: const Icon(Icons.bolt),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Gradient _themeToGradient(VisualizationTheme theme, Color? baseColor) {
+    final Color base;
+    switch (theme) {
+      case VisualizationTheme.blue:
+        base = baseColor ?? Colors.cyan;
+        break;
+      case VisualizationTheme.green:
+        base = baseColor ?? Colors.greenAccent;
+        break;
+      case VisualizationTheme.purple:
+        base = baseColor ?? Colors.purpleAccent;
+        break;
+      case VisualizationTheme.orange:
+        base = baseColor ?? Colors.orangeAccent;
+        break;
+    }
+    return RadialGradient(
       colors: [
         base.withOpacity(0.95),
         base.withOpacity(0.65),
         base.withOpacity(0.1),
       ],
       stops: const [0.0, 0.6, 1.0],
-    );
-
-    final semanticsText = 'Real-time data visualization with ${_beams.length} active beams.';
-    return Stack(
-      children: [
-        Semantics(
-          label: semanticsText,
-          container: true,
-          child: RepaintBoundary(
-            child: SizedBox.expand(
-              child: CustomPaint(
-                painter: DataVisualizationPainter(
-                  beams: List.unmodifiable(_beams),
-                  pulseValue: _pulseAnimation.value,
-                  hubGradient: hubGradient,
-                  starSeed: widget.starfieldSeed,
-                  showStarfield: widget.enableStarfield,
-                  deviceParticlesPhase: _phase,
-                  particleCount: widget.particleCount,
-                  reduceMotion: effectiveReduceMotion,
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: Semantics(
-            label: 'Trigger data burst',
-            button: true,
-            child: FloatingActionButton(
-              onPressed: _manualBurst,
-              tooltip: 'Simulate data burst',
-              child: const Icon(Icons.bolt),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

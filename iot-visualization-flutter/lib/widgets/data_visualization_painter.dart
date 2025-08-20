@@ -15,6 +15,8 @@ class DataVisualizationPainter extends CustomPainter {
     required this.deviceParticlesPhase,
     required this.particleCount,
     required this.reduceMotion,
+    required this.particleSizeRange,
+    required this.particleBlurRadius,
   });
 
   final List<DataBeam> beams;
@@ -25,6 +27,8 @@ class DataVisualizationPainter extends CustomPainter {
   final double deviceParticlesPhase; // 0..1 to animate particles
   final int particleCount;
   final bool reduceMotion;
+  final Size particleSizeRange;
+  final double particleBlurRadius;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -144,8 +148,11 @@ class DataVisualizationPainter extends CustomPainter {
         final fade = beam.isOutgoing ? (1 - along) : along;
         final particlePaint = Paint()
           ..color = beam.color.withOpacity(0.25 + 0.5 * fade)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-        canvas.drawCircle(particlePos, 1.6 + 1.8 * fade, particlePaint);
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, particleBlurRadius);
+        final radiusMin = particleSizeRange.width;
+        final radiusMax = particleSizeRange.height;
+        final radius = radiusMin + (radiusMax - radiusMin) * fade;
+        canvas.drawCircle(particlePos, radius, particlePaint);
       }
     }
   }
