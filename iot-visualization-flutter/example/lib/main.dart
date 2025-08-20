@@ -27,22 +27,81 @@ class DemoScreen extends StatefulWidget {
 
 class _DemoScreenState extends State<DemoScreen> {
   final controller = DataTransmissionController();
+  double allowance = 1.0;
+  DeviceLocation lampLoc = const DeviceLocation(x: 2, y: -1);
+  DeviceLocation thermoLoc = const DeviceLocation(x: -1, y: 0.5);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: DataTransmissionVisualization(
-          controller: controller,
-          hubColor: Colors.cyan,
-          maxConcurrentBeams: 30,
-          enableDirectionalMapping: true,
-          beamSpawnInterval: const Duration(milliseconds: 280),
-          particleCount: 6,
-          colorResolver: ({required bool isOutgoing, String? deviceId}) {
-            if (deviceId == 'camera') return Colors.purpleAccent;
-            return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
-          },
+        child: Stack(
+          children: [
+            DataTransmissionVisualization(
+              controller: controller,
+              hubColor: Colors.cyan,
+              maxConcurrentBeams: 30,
+              enableDirectionalMapping: true,
+              beamSpawnInterval: const Duration(milliseconds: 280),
+              particleCount: 6,
+              colorResolver: ({required bool isOutgoing, String? deviceId}) {
+                if (deviceId == 'camera') return Colors.purpleAccent;
+                return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
+              },
+            ),
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 88,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Data allowance: ${(allowance * 100).round()}%', textAlign: TextAlign.center),
+                  Slider(
+                    value: allowance,
+                    onChanged: (v) {
+                      setState(() => allowance = v);
+                      controller.setDataAllowance(v);
+                    },
+                  ),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    children: [
+                      ElevatedButton(
+                        onPressed: () {
+                          controller.onDataSent('lamp-1', 2.5, lampLoc);
+                        },
+                        child: const Text('Send to Lamp'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          controller.onDataReceived('thermo', 1.0, thermoLoc);
+                        },
+                        child: const Text('Recv from Thermo'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          // Move lamp clockwise-ish
+                          lampLoc = DeviceLocation(x: lampLoc.x * 0.8, y: lampLoc.y * 0.8 + 0.2);
+                          controller.updateDevicePosition('lamp-1', lampLoc);
+                        },
+                        child: const Text('Move Lamp'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          // Move thermo counter-clockwise-ish
+                          thermoLoc = DeviceLocation(x: thermoLoc.x * 0.8 - 0.2, y: thermoLoc.y * 0.8);
+                          controller.updateDevicePosition('thermo', thermoLoc);
+                        },
+                        child: const Text('Move Thermo'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
