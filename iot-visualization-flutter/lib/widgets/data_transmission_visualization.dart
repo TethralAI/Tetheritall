@@ -106,6 +106,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   double _dataAllowance01 = 1.0; // 0..1 user-adjusted allowance
   bool _autoSpawnEnabledOverride;
   double _fpsEma = 0.0;
+  int _lastAccelUs = 0;
+  int _lastMagUs = 0;
+  int _sensorMinIntervalUs = (1000000 / 60).round();
 
   @override
   void initState() {
@@ -143,10 +146,16 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
     if (widget.enableDirectionalMapping) {
       _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
+        final nowUs = DateTime.now().microsecondsSinceEpoch;
+        if (nowUs - _lastAccelUs < _sensorMinIntervalUs) return;
+        _lastAccelUs = nowUs;
         final raw = widget.manualYawRadians ?? atan2(event.y, event.x);
         _deviceYaw = _smoothAngle(_deviceYaw, raw, 0.12);
       });
       _magSub = magnetometerEvents.listen((MagnetometerEvent event) {
+        final nowUs = DateTime.now().microsecondsSinceEpoch;
+        if (nowUs - _lastMagUs < _sensorMinIntervalUs) return;
+        _lastMagUs = nowUs;
         // Nudge yaw toward magnetometer heading for coarse compass fusion
         final magYaw = atan2(event.y, event.x);
         _deviceYaw = _smoothAngle(_deviceYaw, magYaw, 0.06);
@@ -186,7 +195,9 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     }
 
     if (oldWidget.targetFps != widget.targetFps) {
-      _targetFrameIntervalMs = 1000 / widget.targetFps.clamp(15, 120);
+      final fps = widget.targetFps.clamp(15, 120);
+      _targetFrameIntervalMs = 1000 / fps;
+      _sensorMinIntervalUs = (1000000 / (fps >= 60 ? 60 : 30)).round();
     }
 
     // Auto-tune using frame timing reports
