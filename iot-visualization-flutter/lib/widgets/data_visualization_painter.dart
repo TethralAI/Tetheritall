@@ -97,10 +97,11 @@ class DataVisualizationPainter extends CustomPainter {
   void _paintBeams(Canvas canvas, Offset center, double hubRadius, Size size) {
     final maxRadius = sqrt(size.width * size.width + size.height * size.height) / 2;
     for (final beam in beams) {
+      final widthBase = lerpDouble(1.5, 3.5, beam.intensity)! * beam.widthScale;
       final huePaint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = lerpDouble(1.5, 3.5, beam.intensity)!
+        ..strokeWidth = widthBase
         ..color = beam.color.withOpacity(lerpDouble(0.35, 0.9, beam.intensity)!);
 
       final angle = beam.angleRadians;
@@ -128,8 +129,8 @@ class DataVisualizationPainter extends CustomPainter {
       // Draw gradient-like core by overdrawing multiple times with varying alpha
       for (int i = 0; i < 3; i++) {
         final t = i / 2.0;
-        final alpha = (0.22 - t * 0.08) * beam.intensity;
-        final pw = huePaint.strokeWidth * (1.0 + t * 0.7);
+        final alpha = (0.22 - t * 0.08) * beam.intensity * beam.glowIntensity;
+        final pw = huePaint.strokeWidth * (1.0 + t * 0.7 * beam.glowIntensity);
         final p = Paint()
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round

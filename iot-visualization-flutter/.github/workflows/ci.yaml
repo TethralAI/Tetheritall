@@ -21,3 +21,6 @@ jobs:
         run: flutter analyze
       - name: Test
         run: flutter test
+      - name: Integration tests (headless)
+        run: |
+          flutter test integration_test
