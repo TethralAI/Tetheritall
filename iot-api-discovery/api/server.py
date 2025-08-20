@@ -25,6 +25,8 @@ from tools.hue.remote import list_resources as hue_list
 from tools.openhab.local import list_items as oh_list, send_command as oh_cmd
 from tools.zwave.zwave_js_ws import ping_version as zwjs_version, get_nodes as zwjs_nodes, set_value as zwjs_set_value
 from api.alexa_webhook import router as alexa_router
+from tools.smartthings.oauth import build_auth_url as st_auth_url, exchange_code_for_token as st_exchange
+from tools.tuya.oauth import build_auth_url as tuya_auth_url
 
 
 class ScanRequest(BaseModel):
@@ -236,6 +238,32 @@ def create_app() -> FastAPI:
         token = settings.hue_remote_token or ""
         items = await asyncio.to_thread(hue_list, token) if token else []
         return {"count": len(items), "resources": items}
+
+    # SmartThings OAuth helper endpoints
+    @app.get("/integrations/smartthings/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def smartthings_oauth_url() -> Dict[str, Any]:
+        if not (settings.smartthings_client_id and settings.smartthings_redirect_uri):
+            raise HTTPException(status_code=400, detail="missing client_id/redirect_uri")
+        return {"url": st_auth_url(settings.smartthings_client_id, settings.smartthings_redirect_uri)}
+
+    class STOAuthCode(BaseModel):
+        code: str
+
+    @app.post("/integrations/smartthings/oauth/exchange", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def smartthings_oauth_exchange(body: STOAuthCode) -> Dict[str, Any]:
+        if not (settings.smartthings_client_id and settings.smartthings_client_secret and settings.smartthings_redirect_uri):
+            raise HTTPException(status_code=400, detail="missing oauth settings")
+        data = await asyncio.to_thread(
+            st_exchange, settings.smartthings_client_id, settings.smartthings_client_secret, settings.smartthings_redirect_uri, body.code
+        )
+        return data
+
+    # Tuya OAuth helper URL (placeholder)
+    @app.get("/integrations/tuya/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def tuya_oauth_url(region: str = "us") -> Dict[str, Any]:
+        if not (settings.tuya_client_id and settings.tuya_redirect_uri):
+            raise HTTPException(status_code=400, detail="missing tuya client_id/redirect_uri")
+        return {"url": tuya_auth_url(settings.tuya_client_id, settings.tuya_redirect_uri, region)}
 
     # openHAB local
     @app.get("/integrations/openhab/items", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
