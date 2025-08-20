@@ -70,12 +70,28 @@ class NetworkScanner:
             "endpoints_found": len(endpoints),
             "success_rate": metrics.get("overall_success_rate", 0.0),
         }
+        # Enrich with local discovery (best-effort)
+        local = await asyncio.gather(
+            asyncio.to_thread(self._discover_mdns),
+            asyncio.to_thread(self._discover_ssdp),
+            asyncio.to_thread(self._read_arp),
+            return_exceptions=True,
+        )
+        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": []}
+        if isinstance(local[0], list):
+            local_discovery["mdns"] = local[0]
+        if isinstance(local[1], list):
+            local_discovery["ssdp"] = local[1]
+        if isinstance(local[2], list):
+            local_discovery["arp"] = local[2]
+
         return {
             "summary": summary,
             "services": services,
             "endpoints": endpoints,
             "metrics": metrics,
             "test_cases": test_cases,
+            "local": local_discovery,
         }
 
     async def _scan_ports(self, ranges: List[str]) -> List[Dict[str, Any]]:
@@ -289,4 +305,26 @@ class NetworkScanner:
             "coap_endpoints": coap_count,
             "overall_success_rate": float(total > 0) * min(1.0, (http_count + mqtt_count + coap_count) / max(total, 1)),
         }
+
+    # Local discovery wrappers
+    def _discover_mdns(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.discovery.mdns import discover_mdns
+            return discover_mdns()
+        except Exception:
+            return []
+
+    def _discover_ssdp(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.discovery.ssdp import discover_ssdp
+            return discover_ssdp()
+        except Exception:
+            return []
+
+    def _read_arp(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.discovery.arp import read_arp_table
+            return read_arp_table()
+        except Exception:
+            return []
 
