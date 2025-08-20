@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from agents.coordinator import CoordinatorAgent, CoordinatorConfig
 from config.policy import ConsentPolicy
+from app.models.capabilities import normalize_capabilities
+from automation.engine import AutomationEngine, Rule
 
 
 class ScanRequest(BaseModel):
@@ -21,14 +23,17 @@ class ScanRequest(BaseModel):
 def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
     coordinator = CoordinatorAgent(CoordinatorConfig())
+    engine = AutomationEngine()
 
     @app.on_event("startup")
     async def on_start() -> None:
         await coordinator.start()
+        await engine.start()
 
     @app.on_event("shutdown")
     async def on_stop() -> None:
         await coordinator.stop()
+        await engine.stop()
 
     @app.post("/scan/device")
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:
@@ -57,6 +62,23 @@ def create_app() -> FastAPI:
             pass
         finally:
             coordinator.unsubscribe_status(q)
+
+    @app.post("/capabilities")
+    async def capabilities(result: Dict[str, Any]) -> Dict[str, Any]:
+        caps = normalize_capabilities(result)
+        return {"count": len(caps), "capabilities": [c.__dict__ for c in caps]}
+
+    class RuleIn(BaseModel):
+        id: str
+        trigger: Dict[str, Any]
+        conditions: List[Dict[str, Any]] = []
+        actions: List[Dict[str, Any]] = []
+
+    @app.post("/automation/rules")
+    async def add_rule(rule: RuleIn) -> Dict[str, Any]:
+        engine.add_rule(Rule(id=rule.id, trigger=rule.trigger, conditions=rule.conditions, actions=rule.actions))
+        return {"ok": True}
+
 
     return app
 
