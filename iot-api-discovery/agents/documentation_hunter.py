@@ -174,10 +174,17 @@ class DocumentationHunter:
         for repo in repositories:
             text = f"{repo.get('name','')} {repo.get('description','')}"
             extracted = self._extract_from_text(text, source=repo.get("url", "github"))
+            for e in extracted["endpoints"]:
+                e.setdefault("confidence", 0.4)
             endpoints.extend(extracted["endpoints"])  # type: ignore[index]
+            for a in extracted["authentication_methods"]:
+                a.setdefault("confidence", 0.4)
             auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
             examples.extend(extracted["examples"])  # type: ignore[index]
 
+        # Deduplicate before logging
+        endpoints = self._dedupe_endpoints(endpoints)
+        auth_methods = self._dedupe_auth(auth_methods)
         self._log_discoveries(endpoints, auth_methods, examples)
 
         return {
@@ -214,17 +221,25 @@ class DocumentationHunter:
             for link in api_links:
                 spec_endpoints, spec_auth = await self._fetch_and_parse_api_spec(link)
                 for ep in spec_endpoints:
+                    ep.setdefault("confidence", 0.9)
                     endpoints.append(ep)
                 for am in spec_auth:
+                    am.setdefault("confidence", 0.9)
                     auth_methods.append(am)
 
             pages_scanned.append({"url": url, "found_endpoints": len(extracted["endpoints"])})
+            for e in extracted["endpoints"]:
+                e.setdefault("confidence", 0.6)
             endpoints.extend(extracted["endpoints"])  # type: ignore[index]
+            for a in extracted["authentication_methods"]:
+                a.setdefault("confidence", 0.6)
             auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
             examples.extend(extracted["examples"])  # type: ignore[index]
 
         await asyncio.gather(*(scan_url(u) for u in candidate_urls))
 
+        endpoints = self._dedupe_endpoints(endpoints)
+        auth_methods = self._dedupe_auth(auth_methods)
         self._log_discoveries(endpoints, auth_methods, examples)
 
         return {
@@ -283,7 +298,11 @@ class DocumentationHunter:
         for item in results:
             text = f"{item.get('title','')}"
             extracted = self._extract_from_text(text, source=item.get("url", "forums"))
+            for e in extracted["endpoints"]:
+                e.setdefault("confidence", 0.3)
             endpoints.extend(extracted["endpoints"])  # type: ignore[index]
+            for a in extracted["authentication_methods"]:
+                a.setdefault("confidence", 0.3)
             auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
             examples.extend(extracted["examples"])  # type: ignore[index]
 
@@ -315,6 +334,10 @@ class DocumentationHunter:
         await enrich_forum_items(results)
 
         self._log_discoveries(endpoints, auth_methods, examples)
+
+        # Deduplicate endpoints by (method, normalized path)
+        endpoints = self._dedupe_endpoints(endpoints)
+        auth_methods = self._dedupe_auth(auth_methods)
 
         return {
             "sources": {"forums": results},
@@ -641,3 +664,42 @@ class DocumentationHunter:
             )
 
         return endpoints, auth_methods
+
+    def _dedupe_endpoints(self, endpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        def normalize_path(p: str) -> str:
+            # remove protocol/host if full URL
+            p2 = re.sub(r"^https?://[^/]+", "", p)
+            # collapse multiple slashes and trailing slash
+            p2 = re.sub(r"//+", "/", p2).rstrip("/")
+            return p2 or "/"
+        seen: Dict[Tuple[Optional[str], str], Dict[str, Any]] = {}
+        for ep in endpoints:
+            method = (ep.get("method") or "").upper() or None
+            path = normalize_path(str(ep.get("path", "")))
+            key = (method, path)
+            prev = seen.get(key)
+            if not prev:
+                seen[key] = ep
+            else:
+                # keep higher confidence
+                c1 = float(ep.get("confidence") or 0)
+                c2 = float(prev.get("confidence") or 0)
+                if c1 > c2:
+                    seen[key] = ep
+        return list(seen.values())
+
+    def _dedupe_auth(self, auth: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
+        for a in auth:
+            t = str(a.get("type", "unknown")).lower()
+            src = a.get("source")
+            key = (t, src)
+            prev = seen.get(key)
+            if not prev:
+                seen[key] = a
+            else:
+                c1 = float(a.get("confidence") or 0)
+                c2 = float(prev.get("confidence") or 0)
+                if c1 > c2:
+                    seen[key] = a
+        return list(seen.values())
