@@ -64,3 +64,16 @@ class AuthenticationMethod(Base):
 
     device = relationship("Device", back_populates="auth_methods")
 
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(String(64), primary_key=True)
+    manufacturer = Column(String(255), nullable=False)
+    model = Column(String(255), nullable=True)
+    priority = Column(Integer, default=10, nullable=False)
+    state = Column(String(32), default="queued", nullable=False)
+    payload = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+

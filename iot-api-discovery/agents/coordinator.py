@@ -22,7 +22,7 @@ from .documentation_hunter import DocumentationHunter
 from .network_scanner import NetworkScanner
 from config.policy import ConsentPolicy
 from database.api_database import get_session_factory, create_all
-from database.models import Device, ApiEndpoint, AuthenticationMethod, ScanResult
+from database.models import Device, ApiEndpoint, AuthenticationMethod, ScanResult, Task as TaskModel
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,8 @@ class CoordinatorAgent:
             "created_at": time.time(),
         }
         self._tasks_status[task_id] = {"state": "queued", "payload": {"manufacturer": manufacturer, "model": model}}
+        # Persist task for durability
+        await asyncio.to_thread(self._persist_task, task_id, manufacturer, model, priority, payload)
         await self._queue.put((priority, task_id, payload))
         await self._broadcast({"type": "enqueued", "task_id": task_id, "priority": priority})
         return task_id
@@ -178,6 +180,7 @@ class CoordinatorAgent:
         consent: ConsentPolicy = payload.get("consent")
 
         self._tasks_status[task_id] = {"state": "running"}
+        await asyncio.to_thread(self._update_task_state, task_id, "running")
         await self._broadcast({"type": "started", "task_id": task_id, "manufacturer": manufacturer, "model": model})
 
         # Documentation discovery
@@ -209,6 +212,7 @@ class CoordinatorAgent:
         # Persist results
         device_id = await asyncio.to_thread(self._persist_results, manufacturer, model, doc_data, scan_results)
         self._tasks_status[task_id] = {"state": "completed", "device_id": device_id}
+        await asyncio.to_thread(self._update_task_state, task_id, "completed")
         await self._broadcast({"type": "completed", "task_id": task_id, "device_id": device_id})
 
     def _persist_results(
@@ -255,6 +259,27 @@ class CoordinatorAgent:
     # Query helpers for API layer
     def get_task_status(self, task_id: str) -> Dict[str, Any]:
         return self._tasks_status.get(task_id, {"state": "unknown"})
+
+    # Durable tasks
+    def _persist_task(self, task_id: str, manufacturer: str, model: Optional[str], priority: int, payload: Dict[str, Any]) -> None:
+        session = self._session_factory()
+        try:
+            tm = TaskModel(id=task_id, manufacturer=manufacturer, model=model, priority=priority, state="queued", payload=str(payload))
+            session.add(tm)
+            session.commit()
+        finally:
+            session.close()
+
+    def _update_task_state(self, task_id: str, state: str) -> None:
+        session = self._session_factory()
+        try:
+            tm = session.get(TaskModel, task_id)
+            if tm:
+                tm.state = state
+                tm.updated_at = datetime.utcnow()
+                session.commit()
+        finally:
+            session.close()
 
     async def _offload_network_scan(
         self,

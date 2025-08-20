@@ -50,6 +50,13 @@ def create_app() -> FastAPI:
     async def task_status(task_id: str) -> Dict[str, Any]:
         return coordinator.get_task_status(task_id)
 
+    @app.post("/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str) -> Dict[str, Any]:
+        # Soft cancel: mark as cancelled; workers check status (future work)
+        # For now, just update state for visibility
+        await asyncio.to_thread(coordinator._update_task_state, task_id, "cancelled")
+        return {"ok": True}
+
     @app.websocket("/updates")
     async def updates(ws: WebSocket) -> None:
         await ws.accept()
