@@ -24,12 +24,18 @@ class DataTransmissionController {
   void updateDevicePosition(String deviceId, DeviceLocation location) {
     _attachable?.updateDevicePosition(deviceId, location);
   }
+
+  // New: set a global data allowance (0..1) to scale visualization intensity/throughput
+  void setDataAllowance(double allowance01) {
+    _attachable?.setDataAllowance(allowance01);
+  }
 }
 
 abstract class _Attachable {
   void onDataSent(String deviceId, double dataSize, DeviceLocation location);
   void onDataReceived(String deviceId, double dataSize, DeviceLocation location);
   void updateDevicePosition(String deviceId, DeviceLocation location);
+  void setDataAllowance(double allowance01);
 }
 import '../models/device_location.dart';
 

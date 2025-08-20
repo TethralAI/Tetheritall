@@ -2,7 +2,7 @@ import 'dart:ui';
 
 class DataBeam {
   DataBeam({
-    required this.angleRadians,
+    required double angleRadians,
     required this.isOutgoing,
     required this.intensity,
     required this.speed,
@@ -11,9 +11,10 @@ class DataBeam {
     this.glowIntensity = 1.0,
     double? initialProgress,
     this.deviceId,
-  }) : progress = initialProgress ?? 0.0;
+  })  : progress = initialProgress ?? 0.0,
+        angleRadians = angleRadians;
 
-  final double angleRadians; // 0 rad points to +X; increases counter-clockwise
+  double angleRadians; // mutable to allow live direction tracking
   final bool isOutgoing;
   final double intensity; // 0..1 visual thickness/alpha multiplier
   final double speed; // logical speed factor, progress per second
