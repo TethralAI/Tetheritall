@@ -125,6 +125,34 @@ class _DemoScreenState extends State<DemoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('IoT Visualization Demo'),
+        actions: [
+          Builder(
+            builder: (ctx) => IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Settings',
+              onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+            ),
+          ),
+        ],
+      ),
+      endDrawer: Drawer(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(12),
+            child: SettingsPanel(
+              settings: settings,
+              onChanged: (newSettings) async {
+                setState(() => settings = newSettings);
+                controller.setDataAllowance(settings.allowance);
+                controller.setAutoSpawnEnabled(settings.autoSpawn);
+                await settingsService.saveSettings(settings);
+              },
+            ),
+          ),
+        ),
+      ),
       body: SafeArea(
         child: Stack(
           children: [
@@ -160,15 +188,11 @@ class _DemoScreenState extends State<DemoScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SettingsPanel(
-                    settings: settings,
-                    onChanged: (newSettings) async {
-                      setState(() => settings = newSettings);
-                      // Apply key runtime-affecting settings immediately
-                      controller.setDataAllowance(settings.allowance);
-                      controller.setAutoSpawnEnabled(settings.autoSpawn);
-                      await settingsService.saveSettings(settings);
-                    },
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Active beams: $activeBeams'),
+                    ],
                   ),
                   Wrap(
                     alignment: WrapAlignment.center,
