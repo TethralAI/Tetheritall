@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     zwave_js_url: str | None = None  # e.g., ws://host:3000
     # Alexa Smart Home
     alexa_skill_secret: str | None = None
+    # SmartThings OAuth
+    smartthings_client_id: str | None = None
+    smartthings_client_secret: str | None = None
+    smartthings_redirect_uri: str | None = None
+    # Tuya OAuth
+    tuya_redirect_uri: str | None = None
 
     class Config:
         env_file = ".env"
