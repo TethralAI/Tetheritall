@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     tuya_client_id: str | None = None
     tuya_client_secret: str | None = None
     tuya_base_url: str | None = None  # e.g., https://openapi.tuyaus.com
+    # Firebase Cloud Messaging (legacy key)
+    fcm_server_key: str | None = None
+    # AWS
+    aws_region: str | None = None
+    aws_s3_bucket: str | None = None
+    # HCP Terraform (Terraform Cloud) API
+    hcp_terraform_token: str | None = None
+    hcp_terraform_org: str | None = None
+    hcp_terraform_workspace_id: str | None = None
 
     class Config:
         env_file = ".env"

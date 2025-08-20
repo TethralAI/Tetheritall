@@ -13,6 +13,9 @@ from automation.engine import AutomationEngine, Rule
 from config.settings import settings
 from tools.smartthings.cloud import list_devices as st_list, device_commands as st_cmd
 from tools.tuya.cloud import list_devices as tuya_list
+from tools.notify.fcm import send_fcm_legacy
+from tools.cloud.aws import upload_s3
+from tools.iac.hcp_terraform import trigger_run as tf_trigger
 
 
 class ScanRequest(BaseModel):
@@ -123,6 +126,34 @@ def create_app() -> FastAPI:
             return {"count": 0, "devices": []}
         items = await asyncio.to_thread(tuya_list, settings.tuya_client_id, settings.tuya_client_secret, settings.tuya_base_url)
         return {"count": len(items), "devices": items}
+
+    class FCMIn(BaseModel):
+        token: str
+        title: str
+        body: str
+        data: Dict[str, Any] | None = None
+
+    @app.post("/integrations/fcm/send")
+    async def fcm_send(body: FCMIn) -> Dict[str, Any]:
+        if not settings.fcm_server_key:
+            return {"ok": False, "error": "missing server key"}
+        return await asyncio.to_thread(send_fcm_legacy, settings.fcm_server_key, body.token, body.title, body.body, body.data)
+
+    class S3In(BaseModel):
+        key: str
+        content: str
+
+    @app.post("/integrations/aws/s3/upload")
+    async def s3_upload(body: S3In) -> Dict[str, Any]:
+        if not settings.aws_s3_bucket:
+            return {"ok": False, "error": "missing bucket"}
+        return await asyncio.to_thread(upload_s3, settings.aws_s3_bucket, body.key, body.content.encode("utf-8"), settings.aws_region)
+
+    @app.post("/integrations/hcp/terraform/run")
+    async def hcp_tf_run() -> Dict[str, Any]:
+        if not (settings.hcp_terraform_token and settings.hcp_terraform_workspace_id):
+            return {"ok": False, "error": "missing terraform config"}
+        return await asyncio.to_thread(tf_trigger, settings.hcp_terraform_token, settings.hcp_terraform_workspace_id)
 
 
     return app
