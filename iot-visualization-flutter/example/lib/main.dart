@@ -44,6 +44,7 @@ class _DemoScreenState extends State<DemoScreen> {
   int spawnMs = 280;
   double speedScale = 1.0;
   PerformanceMode perfMode = PerformanceMode.normal;
+  Color hubColor = Colors.cyan;
 
   @override
   void initState() {
@@ -67,6 +68,7 @@ class _DemoScreenState extends State<DemoScreen> {
     speedScale = prefs.getDouble('speedScale') ?? speedScale;
     final perfStr = prefs.getString('perfMode') ?? 'normal';
     perfMode = perfStr == 'low' ? PerformanceMode.low : PerformanceMode.normal;
+    hubColor = Color(prefs.getInt('hubColor') ?? hubColor.value);
     setState(() {
       allowance = savedAllowance;
       autoSpawn = savedAutoSpawn;
@@ -141,7 +143,7 @@ class _DemoScreenState extends State<DemoScreen> {
           children: [
             DataTransmissionVisualization(
               controller: controller,
-              hubColor: Colors.cyan,
+              hubColor: hubColor,
               maxConcurrentBeams: maxBeams,
               enableDirectionalMapping: true,
               beamSpawnInterval: Duration(milliseconds: spawnMs),
@@ -340,6 +342,43 @@ class _DemoScreenState extends State<DemoScreen> {
                           },
                         ),
                       ]),
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Text('Hub color'),
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final picked = await showDialog<Color?>(
+                              context: context,
+                              builder: (ctx) {
+                                final colors = <Color>[
+                                  Colors.cyan, Colors.blue, Colors.greenAccent, Colors.purpleAccent, Colors.orangeAccent, Colors.redAccent
+                                ];
+                                return AlertDialog(
+                                  title: const Text('Pick hub color'),
+                                  content: Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: colors
+                                        .map((c) => GestureDetector(
+                                              onTap: () => Navigator.of(ctx).pop(c),
+                                              child: Container(width: 28, height: 28, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+                                            ))
+                                        .toList(),
+                                  ),
+                                );
+                              },
+                            );
+                            if (picked != null) {
+                              setState(() => hubColor = picked);
+                              final prefs = await SharedPreferences.getInstance();
+                              await prefs.setInt('hubColor', picked.value);
+                            }
+                          },
+                          child: const Text('Select'),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(width: 24, height: 24, decoration: BoxDecoration(color: hubColor, shape: BoxShape.circle)),
+                      ]),
                     ],
                   ),
                   Wrap(
@@ -373,6 +412,32 @@ class _DemoScreenState extends State<DemoScreen> {
                           controller.updateDevicePosition('thermo', thermoLoc);
                         },
                         child: const Text('Move Thermo'),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                        onPressed: () async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.clear();
+                          if (!mounted) return;
+                          setState(() {
+                            allowance = 1.0;
+                            autoSpawn = true;
+                            enableStarfield = true;
+                            reduceMotion = false;
+                            showHud = true;
+                            targetFps = 60;
+                            presetTheme = VisualizationTheme.blue;
+                            particleCount = 6;
+                            maxBeams = 30;
+                            spawnMs = 280;
+                            speedScale = 1.0;
+                            perfMode = PerformanceMode.normal;
+                            hubColor = Colors.cyan;
+                          });
+                          controller.setDataAllowance(allowance);
+                          controller.setAutoSpawnEnabled(autoSpawn);
+                        },
+                        child: const Text('Reset defaults'),
                       ),
                     ],
                   ),
