@@ -44,6 +44,9 @@ class DataTransmissionVisualization extends StatefulWidget {
     this.onStats,
     this.showHud = false,
     this.hudTextStyle,
+    this.simulateWhenIdle = true,
+    this.idleSimulationThreshold = const Duration(seconds: 5),
+    this.simulationSpawnRateMultiplier = 1.2,
   });
 
   final OnDataEvent? onDataEvent;
@@ -72,6 +75,9 @@ class DataTransmissionVisualization extends StatefulWidget {
   final void Function({required int activeBeams, required double allowance01, required double fps})? onStats;
   final bool showHud;
   final TextStyle? hudTextStyle;
+  final bool simulateWhenIdle;
+  final Duration idleSimulationThreshold;
+  final double simulationSpawnRateMultiplier;
 
   @override
   State<DataTransmissionVisualization> createState() => _DataTransmissionVisualizationState();
@@ -113,6 +119,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   double _spawnTokens = 0.0;
   double _spawnRatePerSec = 4.0; // default ~ every 250ms
   final double _maxSpawnTokens = 6.0;
+  int _lastRealEventUs = 0;
 
   @override
   void initState() {
@@ -265,10 +272,12 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
   // Public integration points
   void onDataSent(String deviceId, double dataSize, DeviceLocation location) {
+    _recordRealEvent();
     _spawnBeam(isOutgoing: true, deviceId: deviceId, dataSize: dataSize, location: location);
   }
 
   void onDataReceived(String deviceId, double dataSize, DeviceLocation location) {
+    _recordRealEvent();
     _spawnBeam(isOutgoing: false, deviceId: deviceId, dataSize: dataSize, location: location);
   }
 
@@ -366,7 +375,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     // Smooth angle toward target for active device-tracked beams
     // Token bucket refill (tied to allowance and fps)
     final fpsFactor = (_fpsEma <= 1 ? 1.0 : min(1.0, _fpsEma / 60.0));
-    _spawnRatePerSec = max(1.0, 4.0 * (_dataAllowance01 * 0.9 + 0.1) * fpsFactor);
+    final simBoost = _isIdleSimulating ? widget.simulationSpawnRateMultiplier : 1.0;
+    _spawnRatePerSec = max(1.0, 4.0 * (_dataAllowance01 * 0.9 + 0.1) * fpsFactor * simBoost);
     _spawnTokens = min(_maxSpawnTokens, _spawnTokens + _spawnRatePerSec * dtSeconds);
 
     for (final beam in _beams) {
@@ -437,6 +447,12 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   }
 
   bool get _shouldAutoSpawn => _autoSpawnEnabledOverride;
+  bool get _isIdleSimulating {
+    if (!widget.simulateWhenIdle) return false;
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    if (_lastRealEventUs == 0) return nowUs - _initUs > widget.idleSimulationThreshold.inMicroseconds;
+    return nowUs - _lastRealEventUs > widget.idleSimulationThreshold.inMicroseconds;
+  }
 
   Duration get _effectiveSpawnInterval {
     final multiplier = widget.reduceMotion ? 1.8 : 1.0;
@@ -557,4 +573,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       stops: const [0.0, 0.6, 1.0],
     );
   }
+
+  void _recordRealEvent() {
+    _lastRealEventUs = DateTime.now().microsecondsSinceEpoch;
+  }
+
+  final int _initUs = DateTime.now().microsecondsSinceEpoch;
 }
