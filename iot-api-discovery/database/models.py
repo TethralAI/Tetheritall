@@ -79,3 +79,25 @@ class Task(Base):
     paused = Column(Boolean, default=False, nullable=False)
     canceled = Column(Boolean, default=False, nullable=False)
 
+
+class IntegrationCredential(Base):
+    __tablename__ = "integration_credentials"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(64), nullable=False, index=True)  # e.g., smartthings, tuya
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    extra = Column(Text, nullable=True)  # JSON string for additional fields
+
+
+class AutomationRuleModel(Base):
+    __tablename__ = "automation_rules"
+
+    id = Column(String(128), primary_key=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    trigger = Column(Text, nullable=False)  # JSON
+    conditions = Column(Text, nullable=True)  # JSON
+    actions = Column(Text, nullable=False)  # JSON
+    schedule_interval_seconds = Column(Integer, nullable=True)  # optional periodic schedule
+
