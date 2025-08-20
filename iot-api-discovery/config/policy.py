@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 
 @dataclass
@@ -17,7 +18,11 @@ class ConsentPolicy:
     wifi: bool = False
     audio: bool = False
     image: bool = False
+    testing_mode: bool = False
 
     def allows(self, feature: str) -> bool:
+        # If testing mode is enabled, all features are allowed implicitly.
+        if self.testing_mode or os.getenv("IOT_DISCOVERY_TESTING", "").lower() in ("1", "true", "yes"): 
+            return True
         return bool(getattr(self, feature, False))
 
