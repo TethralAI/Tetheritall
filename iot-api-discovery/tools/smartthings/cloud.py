@@ -29,3 +29,13 @@ def device_commands(api_token: str, device_id: str, commands: List[Dict[str, Any
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
+
+def device_status(api_token: str, device_id: str) -> Dict[str, Any]:
+    headers = {"Authorization": f"Bearer {api_token}"}
+    url = f"https://api.smartthings.com/v1/devices/{device_id}/status"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        return r.json() if r.ok else {"error": r.text}
+    except Exception as exc:
+        return {"error": str(exc)}
+
