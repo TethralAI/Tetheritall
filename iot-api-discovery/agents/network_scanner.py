@@ -125,6 +125,7 @@ class NetworkScanner:
             "metrics": metrics,
             "test_cases": test_cases,
             "local": local_discovery,
+            "proxy_controllers": await self._discover_proxy_controllers(services, local_discovery),
         }
 
     async def _scan_ports(self, ranges: List[str]) -> List[Dict[str, Any]]:
@@ -419,4 +420,41 @@ class NetworkScanner:
             return discover_yeelight()
         except Exception:
             return []
+
+    async def _discover_proxy_controllers(self, services: List[Dict[str, Any]], local: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Attempt to identify Zigbee/Z-Wave controllers accessible via HTTP/MQTT/WS.
+
+        Strategy:
+        - For each HTTP host discovered, probe Hue/deCONZ markers.
+        - If MQTT endpoints exist or broker is known, note Zigbee2MQTT.
+        - For candidate Z-Wave JS ports, probe health/info endpoints.
+        """
+        controllers: List[Dict[str, Any]] = []
+        http_hosts = {s["host"] for s in services if s.get("port") in (80, 8080, 443, 8443)}
+
+        # Probe Hue via HTTP
+        try:
+            from tools.zigbee.hue import probe_hue_http
+            for host in http_hosts:
+                res = await asyncio.to_thread(probe_hue_http, host)
+                if res:
+                    controllers.append(res)
+        except Exception:
+            pass
+
+        # Probe Z-Wave JS common port
+        try:
+            from tools.zwave.zwave_js import probe_zwave_js_ws
+            for host in http_hosts:
+                res = await asyncio.to_thread(probe_zwave_js_ws, host)
+                if res:
+                    controllers.append(res)
+        except Exception:
+            pass
+
+        # Infer Zigbee2MQTT from MQTT presence
+        if any(e.get("protocol") == "mqtt" for e in services):
+            controllers.append({"type": "zigbee2mqtt", "hint": "mqtt_present"})
+
+        return controllers
 
