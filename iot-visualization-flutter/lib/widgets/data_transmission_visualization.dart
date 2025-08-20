@@ -400,6 +400,15 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
         return 1.0;
     }
   }
+  double _resolutionScale() {
+    // Lower resolution scale on low performance for offscreen render simulation
+    switch (widget.performanceMode) {
+      case PerformanceMode.low:
+        return 0.85;
+      case PerformanceMode.normal:
+        return 1.0;
+    }
+  }
 
   void _autoDegrade() {
     // Soften visuals: reduce allowance slightly to cap beams & intensity
@@ -439,6 +448,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     final effectiveReduceMotion = widget.reduceMotion || platformReduce;
     final Gradient hubGradient = widget.hubGradient ?? _themeToGradient(widget.presetTheme, widget.hubColor);
 
+    // Throttle semantics updates
     final semanticsText = widget.semanticsLabel ?? 'Real-time data visualization with ${_beams.length} active beams.';
     return VisibilityDetector(
       key: const ValueKey('iot-visualization-visibility'),
@@ -464,6 +474,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
                     particleBlurRadius: widget.particleBlurRadius,
                     starCount: _effectiveStarCount(),
                     globalGlowScale: _effectiveGlowScale(),
+                    useDrawPoints: true,
+                    resolutionScale: _resolutionScale(),
                   ),
                 ),
               ),
