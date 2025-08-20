@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 20
     max_concurrent_requests: int = 10
     rate_limit_per_second: float = 2.0
+    # API auth and rate limiting
+    api_token: str | None = None
+    rate_limit_requests_per_minute: int = 120
     # Cloud integrations
     smartthings_token: str | None = None
     tuya_client_id: str | None = None
