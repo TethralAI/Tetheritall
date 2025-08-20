@@ -7,6 +7,8 @@ class DataBeam {
     required this.intensity,
     required this.speed,
     required this.color,
+    this.widthScale = 1.0,
+    this.glowIntensity = 1.0,
     double? initialProgress,
     this.deviceId,
   }) : progress = initialProgress ?? 0.0;
@@ -16,6 +18,8 @@ class DataBeam {
   final double intensity; // 0..1 visual thickness/alpha multiplier
   final double speed; // logical speed factor, progress per second
   final Color color;
+  final double widthScale; // multiplies stroke width visually
+  final double glowIntensity; // multiplies glow alpha/blur
   final String? deviceId;
 
   double progress; // 0..1 position of head along beam

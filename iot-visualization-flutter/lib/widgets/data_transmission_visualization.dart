@@ -276,6 +276,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       // Aim for ~2s traverse: 0.5 progress/sec => 2s. Slight variance for realism.
       speed: 0.45 + _rand.nextDouble() * 0.15,
       color: resolvedColor,
+      widthScale: widthScale,
+      glowIntensity: glowIntensity,
       deviceId: deviceId,
     );
 
