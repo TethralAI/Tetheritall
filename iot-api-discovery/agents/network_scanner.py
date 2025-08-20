@@ -94,9 +94,11 @@ class NetworkScanner:
             maybe(self._discover_bt_classic, self.consent_policy.allows("bt_classic")),
             maybe(self._discover_lifx, self.consent_policy.allows("wifi")),
             maybe(self._discover_yeelight, self.consent_policy.allows("wifi")),
+            maybe(self._discover_matter_bridges, self.consent_policy.allows("wifi")),
+            maybe(self._discover_smartthings, self.consent_policy.allows("wifi")),
             return_exceptions=True,
         )
-        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": [], "wifi": [], "ble": [], "audio": [], "dnssd": [], "bt_classic": [], "lifx": [], "yeelight": []}
+        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": [], "wifi": [], "ble": [], "audio": [], "dnssd": [], "bt_classic": [], "lifx": [], "yeelight": [], "matter": [], "smartthings": []}
         if isinstance(local[0], list):
             local_discovery["mdns"] = local[0]
         if isinstance(local[1], list):
@@ -117,6 +119,10 @@ class NetworkScanner:
             local_discovery["lifx"] = local[8]
         if isinstance(local[9], list):
             local_discovery["yeelight"] = local[9]
+        if isinstance(local[10], list):
+            local_discovery["matter"] = local[10]
+        if isinstance(local[11], list):
+            local_discovery["smartthings"] = local[11]
 
         return {
             "summary": summary,
@@ -421,6 +427,20 @@ class NetworkScanner:
         except Exception:
             return []
 
+    def _discover_matter_bridges(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.matter.bridge import discover_matter_bridges
+            return discover_matter_bridges()
+        except Exception:
+            return []
+
+    def _discover_smartthings(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.smartthings.lan import discover_smartthings_mdns
+            return discover_smartthings_mdns()
+        except Exception:
+            return []
+
     async def _discover_proxy_controllers(self, services: List[Dict[str, Any]], local: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Attempt to identify Zigbee/Z-Wave controllers accessible via HTTP/MQTT/WS.
 
@@ -437,6 +457,16 @@ class NetworkScanner:
             from tools.zigbee.hue import probe_hue_http
             for host in http_hosts:
                 res = await asyncio.to_thread(probe_hue_http, host)
+                if res:
+                    controllers.append(res)
+        except Exception:
+            pass
+
+        # Probe deCONZ
+        try:
+            from tools.zigbee.deconz import probe_deconz_http
+            for host in http_hosts:
+                res = await asyncio.to_thread(probe_deconz_http, host)
                 if res:
                     controllers.append(res)
         except Exception:
