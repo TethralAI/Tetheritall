@@ -25,6 +25,7 @@
     "@nestjs/testing": "^10.4.7",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.12.12",
+    "@types/uuid": "^10.0.0",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
@@ -35,14 +36,26 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "extensionsToTreatAsEsm": [".ts"],
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
     "roots": [
       "<rootDir>/src",
       "<rootDir>/tests"
     ],
-    "moduleFileExtensions": ["ts", "js", "json"],
+    "moduleFileExtensions": [
+      "ts",
+      "js",
+      "json"
+    ],
     "transform": {
-      "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": "tsconfig.json", "useESM": true }]
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.json",
+          "useESM": true
+        }
+      ]
     },
     "moduleNameMapper": {
       "^(\\.{1,2}/.*)\\.js$": "$1"
@@ -53,4 +66,3 @@
     "node": ">=18.0.0"
   }
 }
-
