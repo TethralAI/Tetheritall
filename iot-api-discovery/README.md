@@ -10,6 +10,13 @@ pip install -r requirements.txt
 uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
+CockroachDB (optional): set `database_url` in `.env`, e.g. `postgresql+psycopg2://user:pass@host:26257/db?sslmode=require`.
+
+Migrations:
+```bash
+alembic upgrade head
+```
+
 ## Key Endpoints
 - POST /scan/device
 - GET /tasks/{task_id}
