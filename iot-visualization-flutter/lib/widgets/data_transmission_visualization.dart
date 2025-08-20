@@ -82,6 +82,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   Timer? _beamTimer;
   Ticker? _ticker;
   StreamSubscription? _accelSub;
+  StreamSubscription? _magSub;
 
   // Orientation state
   double _deviceYaw = 0.0; // radians, from sensors
@@ -127,9 +128,13 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
     if (widget.enableDirectionalMapping) {
       _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
-        // Simple mapping: compute yaw-like angle from X/Y components
         final raw = widget.manualYawRadians ?? atan2(event.y, event.x);
         _deviceYaw = _smoothAngle(_deviceYaw, raw, 0.12);
+      });
+      _magSub = magnetometerEvents.listen((MagnetometerEvent event) {
+        // Nudge yaw toward magnetometer heading for coarse compass fusion
+        final magYaw = atan2(event.y, event.x);
+        _deviceYaw = _smoothAngle(_deviceYaw, magYaw, 0.06);
       });
     }
 
@@ -147,6 +152,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
           final raw = widget.manualYawRadians ?? atan2(event.y, event.x);
           _deviceYaw = _smoothAngle(_deviceYaw, raw, 0.12);
         });
+        _magSub = magnetometerEvents.listen((MagnetometerEvent event) {
+          final magYaw = atan2(event.y, event.x);
+          _deviceYaw = _smoothAngle(_deviceYaw, magYaw, 0.06);
+        });
       }
     }
 
@@ -156,7 +165,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     }
 
     if (oldWidget.beamSpawnInterval != widget.beamSpawnInterval ||
-        oldWidget.reduceMotion != widget.reduceMotion) {
+        oldWidget.reduceMotion != widget.reduceMotion ||
+        oldWidget.autoSpawnEnabled != widget.autoSpawnEnabled) {
       _restartBeamTimerIfNeeded();
     }
 
@@ -172,6 +182,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _beamTimer?.cancel();
     _ticker?.dispose();
     _accelSub?.cancel();
+    _magSub?.cancel();
     _iotService?.dispose();
     widget.controller?._detach(this);
     super.dispose();
@@ -294,14 +305,12 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     return (old + alpha * delta) % twoPi;
   }
 
-  bool get _shouldAutoSpawn => widgetAutoSpawn;
+  bool get _shouldAutoSpawn => widget.autoSpawnEnabled;
 
   Duration get _effectiveSpawnInterval {
     final multiplier = widget.reduceMotion ? 1.8 : 1.0;
     return Duration(milliseconds: (widget.beamSpawnInterval.inMilliseconds * multiplier).round());
   }
-
-  bool get widgetAutoSpawn => true; // default on; change to false to disable demo spawning
 
   void _restartBeamTimerIfNeeded() {
     _beamTimer?.cancel();
