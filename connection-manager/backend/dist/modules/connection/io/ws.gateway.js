@@ -7,19 +7,67 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-import { Injectable } from '@nestjs/common';
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
 import { EventBus } from '../observe/event-bus.js';
 let WsGateway = class WsGateway {
     bus;
+    server;
     constructor(bus) {
         this.bus = bus;
     }
     onModuleInit() {
-        this.bus.on('conn.shadow.updated', () => { });
+        const forward = (event) => {
+            const payload = event;
+            const deviceId = (payload.deviceId ?? payload.device_id);
+            if (deviceId)
+                this.server.to(`device:${deviceId}`).emit(event.type, payload);
+            const capability = payload.capability ?? payload.shadow?.capability;
+            if (capability)
+                this.server.to(`cap:${capability}`).emit(event.type, payload);
+            const room = payload.room ?? payload.location;
+            if (room)
+                this.server.to(`room:${room}`).emit(event.type, payload);
+            this.server.emit(event.type, payload);
+        };
+        this.bus.on('conn.shadow.updated', forward);
+        this.bus.on('conn.command.accepted', forward);
+        this.bus.on('conn.command.delivering', forward);
+        this.bus.on('conn.command.applied', forward);
+        this.bus.on('conn.command.failed', forward);
+        this.bus.on('conn.privacy.allowed', forward);
+        this.bus.on('conn.privacy.blocked', forward);
+        this.bus.on('sec.signal.breakdown', forward);
+        this.bus.on('sec.signal.anomaly_local', forward);
+        this.bus.on('sec.signal.intrusion_suspected', forward);
+    }
+    subscribe(body, client) {
+        if (body.deviceId)
+            client.join(`device:${body.deviceId}`);
+        if (body.capability)
+            client.join(`cap:${body.capability}`);
+        if (body.room)
+            client.join(`room:${body.room}`);
+        return { ok: true };
     }
 };
+__decorate([
+    WebSocketServer(),
+    __metadata("design:type", Server)
+], WsGateway.prototype, "server", void 0);
+__decorate([
+    SubscribeMessage('subscribe'),
+    __param(0, MessageBody()),
+    __param(1, ConnectedSocket()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Socket]),
+    __metadata("design:returntype", void 0)
+], WsGateway.prototype, "subscribe", null);
 WsGateway = __decorate([
-    Injectable(),
+    WebSocketGateway({ namespace: '/v1/stream', cors: { origin: true } }),
     __metadata("design:paramtypes", [EventBus])
 ], WsGateway);
 export { WsGateway };
