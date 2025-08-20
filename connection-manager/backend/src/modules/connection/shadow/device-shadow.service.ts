@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventBus } from '../observe/event-bus.js';
 
 export interface ShadowEntry {
   version: number;
@@ -9,6 +10,7 @@ export interface ShadowEntry {
 @Injectable()
 export class DeviceShadowService {
   private shadows = new Map<string, ShadowEntry>();
+  constructor(private readonly bus: EventBus) {}
 
   get(deviceId: string): ShadowEntry | undefined {
     return this.shadows.get(deviceId);
@@ -24,6 +26,7 @@ export class DeviceShadowService {
       updatedAt: Date.now(),
     };
     this.shadows.set(deviceId, next);
+    this.bus.emit({ type: 'conn.shadow.updated', deviceId, version: version, shadow: next });
     return next;
   }
 }
