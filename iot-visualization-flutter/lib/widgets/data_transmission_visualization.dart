@@ -96,6 +96,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   double _smoothedYaw = 0.0;
   double _targetFrameIntervalMs = 1000 / 60;
   bool _isVisible = true;
+  final Map<String, DeviceLocation> _devicePositions = <String, DeviceLocation>{};
+  double _dataAllowance01 = 1.0; // 0..1 user-adjusted allowance
 
   @override
   void initState() {
@@ -229,11 +231,28 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   }
 
   void updateDevicePosition(String deviceId, DeviceLocation location) {
-    // Reserved for phase 2 mapping of specific device directions
+    _devicePositions[deviceId] = location;
+    // Update active beams for this device to aim toward latest position
+    if (widget.enableDirectionalMapping) {
+      for (final beam in _beams) {
+        if (beam.deviceId == deviceId) {
+          final origin = const DeviceLocation(x: 0, y: 0);
+          final worldAngle = origin.angleTo(location);
+          beam.angleRadians = worldAngle - _deviceYaw;
+        }
+      }
+    }
+  }
+
+  @override
+  void setDataAllowance(double allowance01) {
+    _dataAllowance01 = allowance01.clamp(0.0, 1.0);
+    _restartBeamTimerIfNeeded();
   }
 
   void _maybeSpawnBeam() {
-    if (_beams.length >= widget.maxConcurrentBeams) return;
+    final allowedMax = max(1, (widget.maxConcurrentBeams * (_dataAllowance01 * 0.9 + 0.1)).floor());
+    if (_beams.length >= allowedMax) return;
     final isOutgoing = _rand.nextBool();
     _spawnBeam(isOutgoing: isOutgoing);
   }
@@ -244,7 +263,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     double dataSize = 1.0,
     DeviceLocation? location,
   }) {
-    final double baseIntensity = (dataSize.clamp(0.1, 10.0) / 10.0) * widget.intensityScale;
+    final double baseIntensity = (dataSize.clamp(0.1, 10.0) / 10.0) * widget.intensityScale * (_dataAllowance01 * 0.9 + 0.1);
     final double intensity = baseIntensity.clamp(0.15, 1.0);
 
     double angle = _rand.nextDouble() * pi * 2;
