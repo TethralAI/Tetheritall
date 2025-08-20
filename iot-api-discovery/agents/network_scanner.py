@@ -53,15 +53,22 @@ class NetworkScanner:
         ip_ranges: List[str],
         device_hint: Optional[Dict[str, Any]] = None,
         config: Optional[NetworkScannerConfig] = None,
+        consent_policy: Optional["ConsentPolicy"] = None,
     ) -> None:
         self.ip_ranges = ip_ranges
         self.device_hint = device_hint or {}
         self.config = config or NetworkScannerConfig()
         self._semaphore = asyncio.Semaphore(self.config.max_concurrent_scans)
+        # Lazy import to avoid circular import at module top
+        if consent_policy is None:
+            from config.policy import ConsentPolicy  # type: ignore
+            self.consent_policy = ConsentPolicy()
+        else:
+            self.consent_policy = consent_policy
 
     async def scan(self) -> Dict[str, Any]:
         logger.info("Starting network scan for ranges: %s", ", ".join(self.ip_ranges))
-        services = await self._scan_ports(self.ip_ranges)
+        services = await self._scan_ports(self.ip_ranges) if self.consent_policy.allows("active_scan") else []
         endpoints, test_cases = await self._probe_services(services)
         metrics = self._compute_metrics(services, endpoints)
         summary = {
@@ -71,19 +78,33 @@ class NetworkScanner:
             "success_rate": metrics.get("overall_success_rate", 0.0),
         }
         # Enrich with local discovery (best-effort)
+        async def maybe(func, allow: bool):
+            if allow:
+                return await asyncio.to_thread(func)
+            return []
+
         local = await asyncio.gather(
-            asyncio.to_thread(self._discover_mdns),
-            asyncio.to_thread(self._discover_ssdp),
-            asyncio.to_thread(self._read_arp),
+            maybe(self._discover_mdns, self.consent_policy.allows("wifi")),
+            maybe(self._discover_ssdp, self.consent_policy.allows("wifi")),
+            maybe(self._read_arp, True),
+            maybe(self._list_wifi_networks, self.consent_policy.allows("wifi")),
+            maybe(self._discover_ble, self.consent_policy.allows("bluetooth")),
+            maybe(self._list_audio_devices, self.consent_policy.allows("audio")),
             return_exceptions=True,
         )
-        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": []}
+        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": [], "wifi": [], "ble": [], "audio": []}
         if isinstance(local[0], list):
             local_discovery["mdns"] = local[0]
         if isinstance(local[1], list):
             local_discovery["ssdp"] = local[1]
         if isinstance(local[2], list):
             local_discovery["arp"] = local[2]
+        if isinstance(local[3], list):
+            local_discovery["wifi"] = local[3]
+        if isinstance(local[4], list):
+            local_discovery["ble"] = local[4]
+        if isinstance(local[5], list):
+            local_discovery["audio"] = local[5]
 
         return {
             "summary": summary,
@@ -325,6 +346,37 @@ class NetworkScanner:
         try:
             from tools.discovery.arp import read_arp_table
             return read_arp_table()
+        except Exception:
+            return []
+
+    def _list_wifi_networks(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.wireless.wifi import list_wifi_networks
+            return list_wifi_networks()
+        except Exception:
+            return []
+
+    def _discover_ble(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.discovery.ble import discover_ble
+            return discover_ble()
+        except Exception:
+            return []
+
+    def _list_audio_devices(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.audio.audio_detect import list_audio_devices
+            return list_audio_devices()
+        except Exception:
+            return []
+
+    def analyze_image(self, image_path: str) -> List[Dict[str, Any]]:
+        """Decode QR/barcodes from image if image consent provided."""
+        if not self.consent_policy.allows("image"):
+            return []
+        try:
+            from tools.vision.barcode import decode_barcodes
+            return decode_barcodes(image_path)
         except Exception:
             return []
 

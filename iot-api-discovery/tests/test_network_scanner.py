@@ -3,11 +3,13 @@ from __future__ import annotations
 import pytest
 
 from agents.network_scanner import NetworkScanner, NetworkScannerConfig
+from config.policy import ConsentPolicy
 
 
 @pytest.mark.asyncio
 async def test_scan_aggregates(monkeypatch):
-    scanner = NetworkScanner(ip_ranges=["192.168.1.0/30"], device_hint={})
+    policy = ConsentPolicy(active_scan=True, wifi=False)
+    scanner = NetworkScanner(ip_ranges=["192.168.1.0/30"], device_hint={}, consent_policy=policy)
 
     async def fake_scan_ports(ranges):
         return [
