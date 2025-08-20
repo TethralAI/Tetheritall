@@ -10,6 +10,9 @@ from agents.coordinator import CoordinatorAgent, CoordinatorConfig
 from config.policy import ConsentPolicy
 from app.models.capabilities import normalize_capabilities
 from automation.engine import AutomationEngine, Rule
+from config.settings import settings
+from tools.smartthings.cloud import list_devices as st_list, device_commands as st_cmd
+from tools.tuya.cloud import list_devices as tuya_list
 
 
 class ScanRequest(BaseModel):
@@ -95,6 +98,31 @@ def create_app() -> FastAPI:
     async def add_rule(rule: RuleIn) -> Dict[str, Any]:
         engine.add_rule(Rule(id=rule.id, trigger=rule.trigger, conditions=rule.conditions, actions=rule.actions))
         return {"ok": True}
+
+    # SmartThings Cloud
+    @app.get("/integrations/smartthings/devices")
+    async def smartthings_devices() -> Dict[str, Any]:
+        token = settings.smartthings_token or ""
+        items = await asyncio.to_thread(st_list, token) if token else []
+        return {"count": len(items), "devices": items}
+
+    class STCommandIn(BaseModel):
+        device_id: str
+        commands: List[Dict[str, Any]]
+
+    @app.post("/integrations/smartthings/commands")
+    async def smartthings_commands(body: STCommandIn) -> Dict[str, Any]:
+        token = settings.smartthings_token or ""
+        res = await asyncio.to_thread(st_cmd, token, body.device_id, body.commands) if token else {"ok": False, "error": "missing token"}
+        return res
+
+    # Tuya Cloud (minimal)
+    @app.get("/integrations/tuya/devices")
+    async def tuya_devices() -> Dict[str, Any]:
+        if not (settings.tuya_client_id and settings.tuya_client_secret and settings.tuya_base_url):
+            return {"count": 0, "devices": []}
+        items = await asyncio.to_thread(tuya_list, settings.tuya_client_id, settings.tuya_client_secret, settings.tuya_base_url)
+        return {"count": len(items), "devices": items}
 
 
     return app
