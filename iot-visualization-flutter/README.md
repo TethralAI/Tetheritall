@@ -35,10 +35,22 @@ Widget build(BuildContext context) {
       starfieldSeed: 1337,
       particleCount: 6,
       reduceMotion: false,
+      autoSpawnEnabled: true, // turn off in production if you only use real data
+      targetFps: 60,
+      presetTheme: VisualizationTheme.blue,
+      semanticsLabel: 'IoT data visualization',
+      particleSizeRange: Size(1.6, 3.0),
+      particleBlurRadius: 3.0,
       colorResolver: ({required bool isOutgoing, String? deviceId}) {
         // Customize colors per device/type
         if (deviceId == 'camera') return Colors.purpleAccent;
         return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
+      },
+      beamStyleResolver: ({required bool isOutgoing, String? deviceId}) {
+        if (deviceId == 'router') {
+          return BeamStyle(color: Colors.lightGreenAccent, widthScale: 1.3, glowIntensity: 1.2);
+        }
+        return BeamStyle(color: isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726));
       },
     ),
   );
