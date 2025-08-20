@@ -11,14 +11,20 @@ import { Injectable } from '@nestjs/common';
 import { ConsentCache } from './consent-cache.service.js';
 import { PrivacyClassifier } from './privacy-classifier.service.js';
 import { MinimizationService } from './minimization/minimization.service.js';
+import { EventBus } from '../observe/event-bus.js';
+import { LocalOnlyModeService } from './local-only.service.js';
 let EgressGuard = class EgressGuard {
     cache;
     classifier;
     minimizer;
-    constructor(cache, classifier, minimizer) {
+    bus;
+    localOnly;
+    constructor(cache, classifier, minimizer, bus, localOnly) {
         this.cache = cache;
         this.classifier = classifier;
         this.minimizer = minimizer;
+        this.bus = bus;
+        this.localOnly = localOnly;
     }
     async evaluate(event) {
         const classified = this.classifier.classify(event.capability, event.value);
@@ -33,9 +39,15 @@ let EgressGuard = class EgressGuard {
         let consent = await this.cache.getConsent(event.deviceId);
         if (!consent)
             consent = await this.cache.fetchAndCache(event.deviceId);
+        if (this.localOnly.isEnabled()) {
+            this.bus.emit({ type: 'conn.privacy.blocked', deviceId: event.deviceId, policyVersion: consent.policyVersion, reason: 'local_only_mode' });
+            return { allowed: false, policyVersion: consent.policyVersion, reason: 'local_only_mode', eventMinimized: minimizedEvent };
+        }
         if (!consent.allowed) {
+            this.bus.emit({ type: 'conn.privacy.blocked', deviceId: event.deviceId, policyVersion: consent.policyVersion, reason: consent.reason });
             return { allowed: false, policyVersion: consent.policyVersion, reason: consent.reason ?? 'denied', eventMinimized: minimizedEvent };
         }
+        this.bus.emit({ type: 'conn.privacy.allowed', deviceId: event.deviceId, policyVersion: consent.policyVersion });
         return { allowed: true, policyVersion: consent.policyVersion, eventMinimized: minimizedEvent };
     }
 };
@@ -43,7 +55,9 @@ EgressGuard = __decorate([
     Injectable(),
     __metadata("design:paramtypes", [ConsentCache,
         PrivacyClassifier,
-        MinimizationService])
+        MinimizationService,
+        EventBus,
+        LocalOnlyModeService])
 ], EgressGuard);
 export { EgressGuard };
 //# sourceMappingURL=egress-guard.service.js.map

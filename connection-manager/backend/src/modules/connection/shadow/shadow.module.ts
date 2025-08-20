@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
+import { DeviceShadowService } from './device-shadow.service.js';
 
-@Module({})
+@Module({ providers: [DeviceShadowService], exports: [DeviceShadowService] })
 export class ShadowModule {}
 

@@ -4,12 +4,21 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-import { Module } from '@nestjs/common';
-import { DeviceShadowService } from './device-shadow.service.js';
-let ShadowModule = class ShadowModule {
+import { Injectable } from '@nestjs/common';
+let LocalOnlyModeService = class LocalOnlyModeService {
+    enabled = false;
+    enable() {
+        this.enabled = true;
+    }
+    disable() {
+        this.enabled = false;
+    }
+    isEnabled() {
+        return this.enabled;
+    }
 };
-ShadowModule = __decorate([
-    Module({ providers: [DeviceShadowService], exports: [DeviceShadowService] })
-], ShadowModule);
-export { ShadowModule };
-//# sourceMappingURL=shadow.module.js.map
+LocalOnlyModeService = __decorate([
+    Injectable()
+], LocalOnlyModeService);
+export { LocalOnlyModeService };
+//# sourceMappingURL=local-only.service.js.map
