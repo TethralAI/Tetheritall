@@ -89,6 +89,8 @@ class IntegrationCredential(Base):
     refresh_token = Column(Text, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     extra = Column(Text, nullable=True)  # JSON string for additional fields
+    tenant_id = Column(String(64), nullable=True, index=True)
+    encrypted = Column(Boolean, default=False, nullable=False)
 
 
 class AutomationRuleModel(Base):
@@ -100,4 +102,18 @@ class AutomationRuleModel(Base):
     conditions = Column(Text, nullable=True)  # JSON
     actions = Column(Text, nullable=False)  # JSON
     schedule_interval_seconds = Column(Integer, nullable=True)  # optional periodic schedule
+    last_run_at = Column(DateTime, nullable=True)
+    cron: Column = Column(String(128), nullable=True)  # optional cron expression
+
+
+class DeviceTwin(Base):
+    __tablename__ = "device_twins"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(64), nullable=False, index=True)  # e.g., zigbee2mqtt, smartthings
+    external_id = Column(String(255), nullable=False, index=True)  # device identifier in provider
+    name = Column(String(255), nullable=True)
+    state = Column(Text, nullable=True)  # JSON state snapshot
+    capabilities = Column(Text, nullable=True)  # JSON array of capability names
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
