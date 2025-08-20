@@ -17,6 +17,8 @@ class DataVisualizationPainter extends CustomPainter {
     required this.reduceMotion,
     required this.particleSizeRange,
     required this.particleBlurRadius,
+    required this.starCount,
+    required this.globalGlowScale,
   });
 
   final List<DataBeam> beams;
@@ -29,6 +31,8 @@ class DataVisualizationPainter extends CustomPainter {
   final bool reduceMotion;
   final Size particleSizeRange;
   final double particleBlurRadius;
+  final int starCount;
+  final double globalGlowScale;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -67,7 +71,7 @@ class DataVisualizationPainter extends CustomPainter {
     final recorder = PictureRecorder();
     final starCanvas = Canvas(recorder);
     final rand = Random(starSeed);
-    final starCount = 140;
+    final starCount = this.starCount;
     final paint = Paint()..color = Colors.white.withOpacity(0.7);
     for (var i = 0; i < starCount; i++) {
       final x = rand.nextDouble() * size.width;
@@ -129,8 +133,9 @@ class DataVisualizationPainter extends CustomPainter {
       // Draw gradient-like core by overdrawing multiple times with varying alpha
       for (int i = 0; i < 3; i++) {
         final t = i / 2.0;
-        final alpha = (0.22 - t * 0.08) * beam.intensity * beam.glowIntensity;
-        final pw = huePaint.strokeWidth * (1.0 + t * 0.7 * beam.glowIntensity);
+        final glow = beam.glowIntensity * globalGlowScale;
+        final alpha = (0.22 - t * 0.08) * beam.intensity * glow;
+        final pw = huePaint.strokeWidth * (1.0 + t * 0.7 * glow);
         final p = Paint()
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
