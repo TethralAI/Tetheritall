@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:iot_visualization/iot_visualization.dart';
 
 class SettingsService {
   SharedPreferences? _prefs;
@@ -124,6 +125,4 @@ class VisualizationSettings {
   Color hubColor;
 }
 
-enum VisualizationTheme { blue, green, purple, orange }
-enum PerformanceMode { normal, low }
 
