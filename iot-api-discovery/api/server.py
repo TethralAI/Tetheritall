@@ -22,6 +22,9 @@ from tools.iac.hcp_terraform import trigger_run as tf_trigger
 from tools.home_assistant.local import list_entities as ha_list, call_service as ha_call
 from tools.google.nest_sdm import list_devices as nest_list
 from tools.hue.remote import list_resources as hue_list
+from tools.openhab.local import list_items as oh_list, send_command as oh_cmd
+from tools.zwave.zwave_js_ws import ping_version as zwjs_version
+from api.alexa_webhook import router as alexa_router
 
 
 class ScanRequest(BaseModel):
@@ -65,6 +68,8 @@ def create_app() -> FastAPI:
     async def on_stop() -> None:
         await coordinator.stop()
         await engine.stop()
+
+    app.include_router(alexa_router)
 
     @app.post("/scan/device", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:
@@ -231,6 +236,31 @@ def create_app() -> FastAPI:
         token = settings.hue_remote_token or ""
         items = await asyncio.to_thread(hue_list, token) if token else []
         return {"count": len(items), "resources": items}
+
+    # openHAB local
+    @app.get("/integrations/openhab/items", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def openhab_items() -> Dict[str, Any]:
+        if not settings.openhab_base_url:
+            return {"count": 0, "items": []}
+        items = await asyncio.to_thread(oh_list, settings.openhab_base_url, settings.openhab_token)
+        return {"count": len(items), "items": items}
+
+    class OHCommandIn(BaseModel):
+        item: str
+        command: str
+
+    @app.post("/integrations/openhab/command", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def openhab_command(body: OHCommandIn) -> Dict[str, Any]:
+        if not settings.openhab_base_url:
+            return {"ok": False, "error": "missing openhab base url"}
+        return await asyncio.to_thread(oh_cmd, settings.openhab_base_url, body.item, body.command, settings.openhab_token)
+
+    # Z-Wave JS WS
+    @app.get("/integrations/zwave_js/version", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def zwave_js_version() -> Dict[str, Any]:
+        if not settings.zwave_js_url:
+            return {"ok": False, "error": "missing zwave_js_url"}
+        return await zwjs_version(settings.zwave_js_url)
 
 
     return app

@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     google_nest_access_token: str | None = None
     # Philips Hue Remote API (generic bearer token)
     hue_remote_token: str | None = None
+    # openHAB local
+    openhab_base_url: str | None = None
+    openhab_token: str | None = None
+    # Home Assistant Supervisor (optional)
+    ha_supervisor_base_url: str | None = None
+    # Z-Wave JS
+    zwave_js_url: str | None = None  # e.g., ws://host:3000
+    # Alexa Smart Home
+    alexa_skill_secret: str | None = None
 
     class Config:
         env_file = ".env"
