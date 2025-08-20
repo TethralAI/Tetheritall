@@ -13,6 +13,8 @@ class DataVisualizationPainter extends CustomPainter {
     required this.starSeed,
     required this.showStarfield,
     required this.deviceParticlesPhase,
+    required this.particleCount,
+    required this.reduceMotion,
   });
 
   final List<DataBeam> beams;
@@ -21,6 +23,8 @@ class DataVisualizationPainter extends CustomPainter {
   final int starSeed;
   final bool showStarfield;
   final double deviceParticlesPhase; // 0..1 to animate particles
+  final int particleCount;
+  final bool reduceMotion;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -48,7 +52,16 @@ class DataVisualizationPainter extends CustomPainter {
     canvas.drawRect(rect, bgPaint);
   }
 
+  Picture? _cachedStars;
+  Size? _cachedSize;
+
   void _paintStarfield(Canvas canvas, Size size) {
+    if (_cachedStars != null && _cachedSize == size) {
+      canvas.drawPicture(_cachedStars!);
+      return;
+    }
+    final recorder = PictureRecorder();
+    final starCanvas = Canvas(recorder);
     final rand = Random(starSeed);
     final starCount = 140;
     final paint = Paint()..color = Colors.white.withOpacity(0.7);
@@ -57,8 +70,11 @@ class DataVisualizationPainter extends CustomPainter {
       final y = rand.nextDouble() * size.height;
       final r = rand.nextDouble() * 1.2 + 0.2;
       paint.color = Colors.white.withOpacity(0.4 + rand.nextDouble() * 0.4);
-      canvas.drawCircle(Offset(x, y), r, paint);
+      starCanvas.drawCircle(Offset(x, y), r, paint);
     }
+    _cachedStars = recorder.endRecording();
+    _cachedSize = size;
+    canvas.drawPicture(_cachedStars!);
   }
 
   void _paintHub(Canvas canvas, Offset center, double radius) {
@@ -119,8 +135,8 @@ class DataVisualizationPainter extends CustomPainter {
       }
 
       // Particles traveling along the beam, constrained by head position
-      final particleCount = 6;
-      for (int i = 0; i < particleCount; i++) {
+      final count = reduceMotion ? max(2, (particleCount / 2).floor()) : particleCount;
+      for (int i = 0; i < count; i++) {
         final base = (i / particleCount + deviceParticlesPhase) % 1.0;
         final along = beam.isOutgoing ? base : (1 - base);
         if (along > clampedProgress) continue; // do not render beyond head
@@ -141,6 +157,8 @@ class DataVisualizationPainter extends CustomPainter {
         oldDelegate.hubGradient != hubGradient ||
         oldDelegate.starSeed != starSeed ||
         oldDelegate.showStarfield != showStarfield ||
-        oldDelegate.deviceParticlesPhase != deviceParticlesPhase;
+        oldDelegate.deviceParticlesPhase != deviceParticlesPhase ||
+        oldDelegate.particleCount != particleCount ||
+        oldDelegate.reduceMotion != reduceMotion;
   }
 }

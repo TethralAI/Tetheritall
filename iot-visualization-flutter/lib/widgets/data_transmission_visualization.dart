@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../models/data_beam.dart';
 import '../models/device_location.dart';
@@ -22,6 +23,12 @@ class DataTransmissionVisualization extends StatefulWidget {
     this.enableStarfield = true,
     this.intensityScale = 1.0,
     this.controller,
+    this.beamSpawnInterval = const Duration(milliseconds: 300),
+    this.globalSpeedScale = 1.0,
+    this.starfieldSeed = 1337,
+    this.particleCount = 6,
+    this.reduceMotion = false,
+    this.colorResolver,
   });
 
   final OnDataEvent? onDataEvent;
@@ -31,6 +38,12 @@ class DataTransmissionVisualization extends StatefulWidget {
   final bool enableStarfield;
   final double intensityScale; // 0.5..2.0
   final DataTransmissionController? controller;
+  final Duration beamSpawnInterval;
+  final double globalSpeedScale; // Multiplier on beam speeds
+  final int starfieldSeed;
+  final int particleCount; // particles per beam
+  final bool reduceMotion; // reduce energy and particle count
+  final Color Function({required bool isOutgoing, String? deviceId})? colorResolver;
 
   @override
   State<DataTransmissionVisualization> createState() => _DataTransmissionVisualizationState();
@@ -45,7 +58,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   final List<DataBeam> _beams = <DataBeam>[];
   final Random _rand = Random();
   Timer? _beamTimer;
-  Timer? _tickTimer;
+  Ticker? _ticker;
   StreamSubscription? _accelSub;
 
   // Orientation state
@@ -56,6 +69,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
   // Phase for particle animation
   double _phase = 0.0;
+  int? _lastTickMs;
 
   @override
   void initState() {
@@ -69,14 +83,19 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _pulseController.repeat(reverse: true);
 
     // Beam generation timer
-    _beamTimer = Timer.periodic(const Duration(milliseconds: 300), (_) => _maybeSpawnBeam());
+    _beamTimer = Timer.periodic(widget.beamSpawnInterval, (_) => _maybeSpawnBeam());
 
-    // Tick update for progress and repaint
-    _tickTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      _advanceBeams(0.016);
-      _phase = (_phase + 0.016 / 2.0) % 1.0;
+    // Smooth ticker for updates
+    _ticker = createTicker((elapsed) {
+      final dt = _lastTickMs == null
+          ? 0.0
+          : (elapsed.inMicroseconds - _lastTickMs!) / 1e6;
+      _lastTickMs = elapsed.inMicroseconds;
+      final double step = dt.clamp(0.0, 0.05);
+      _advanceBeams(step);
+      _phase = (_phase + step / 2.0) % 1.0;
       if (mounted) setState(() {});
-    });
+    })..start();
 
     if (widget.enableDirectionalMapping) {
       _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
@@ -111,7 +130,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   void dispose() {
     _pulseController.dispose();
     _beamTimer?.cancel();
-    _tickTimer?.cancel();
+    _ticker?.dispose();
     _accelSub?.cancel();
     _iotService?.dispose();
     widget.controller?._detach(this);
@@ -154,9 +173,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       angle = worldAngle - _deviceYaw;
     }
 
-    final Color outgoingColor = const Color(0xFF00E5FF); // cyan
-    final Color incomingColor = const Color(0xFFFFA726); // amber
-    final beamColor = isOutgoing ? outgoingColor : incomingColor;
+    final defaultOutgoing = const Color(0xFF00E5FF); // cyan
+    final defaultIncoming = const Color(0xFFFFA726); // amber
+    final fallback = isOutgoing ? defaultOutgoing : defaultIncoming;
+    final beamColor = widget.colorResolver?.call(isOutgoing: isOutgoing, deviceId: deviceId) ?? fallback;
 
     final beam = DataBeam(
       angleRadians: angle,
@@ -173,7 +193,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
 
   void _advanceBeams(double dtSeconds) {
     for (final beam in _beams) {
-      beam.progress += beam.speed * dtSeconds; // 2s-ish full traverse at speed ~0.5
+      beam.progress += beam.speed * widget.globalSpeedScale * dtSeconds;
     }
     _beams.removeWhere((b) => b.isComplete);
   }
@@ -209,9 +229,11 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
                   beams: List.unmodifiable(_beams),
                   pulseValue: _pulseAnimation.value,
                   hubGradient: hubGradient,
-                  starSeed: 1337,
+                  starSeed: widget.starfieldSeed,
                   showStarfield: widget.enableStarfield,
                   deviceParticlesPhase: _phase,
+                  particleCount: widget.particleCount,
+                  reduceMotion: widget.reduceMotion,
                 ),
               ),
             ),
