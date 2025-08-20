@@ -68,6 +68,8 @@ class CoordinatorAgent:
         logger.info("Coordinator started with %s workers", len(self._workers))
         # Start scaler loop
         asyncio.create_task(self._scaler_loop())
+        # Load queued tasks from DB
+        await asyncio.to_thread(self._load_persisted_tasks)
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -124,7 +126,17 @@ class CoordinatorAgent:
             except asyncio.CancelledError:
                 break
             try:
-                await self._run_task(task_id, payload)
+                # Check latest task state for pause/cancel
+                state = await asyncio.to_thread(self._get_task_state, task_id)
+                if state in ("cancelled", "canceled"):
+                    self._tasks_status[task_id] = {"state": "cancelled"}
+                    await self._broadcast({"type": "cancelled", "task_id": task_id})
+                elif state == "paused":
+                    # Requeue with same priority later
+                    await asyncio.sleep(1)
+                    await self._queue.put((priority, task_id, payload))
+                else:
+                    await self._run_task(task_id, payload)
             except Exception as exc:
                 logger.exception("Task %s failed: %s", task_id, exc)
                 self._tasks_status[task_id] = {"state": "failed", "error": str(exc)}
@@ -264,6 +276,10 @@ class CoordinatorAgent:
     def _persist_task(self, task_id: str, manufacturer: str, model: Optional[str], priority: int, payload: Dict[str, Any]) -> None:
         session = self._session_factory()
         try:
+            # Dedupe: if an identical queued task exists, skip adding (simple heuristic)
+            existing = session.query(TaskModel).filter_by(manufacturer=manufacturer, model=model, state="queued").first()
+            if existing:
+                return
             tm = TaskModel(id=task_id, manufacturer=manufacturer, model=model, priority=priority, state="queued", payload=str(payload))
             session.add(tm)
             session.commit()
@@ -278,6 +294,28 @@ class CoordinatorAgent:
                 tm.state = state
                 tm.updated_at = datetime.utcnow()
                 session.commit()
+        finally:
+            session.close()
+
+    def _get_task_state(self, task_id: str) -> str:
+        session = self._session_factory()
+        try:
+            tm = session.get(TaskModel, task_id)
+            return tm.state if tm else "unknown"
+        finally:
+            session.close()
+
+    def _load_persisted_tasks(self) -> None:
+        session = self._session_factory()
+        try:
+            for tm in session.query(TaskModel).filter(TaskModel.state == "queued", TaskModel.canceled == False).order_by(TaskModel.priority).all():
+                # Minimal payload reconstruction: manufacturer/model only (consent defaults)
+                payload = {"manufacturer": tm.manufacturer, "model": tm.model, "ip_ranges": [], "consent": ConsentPolicy(), "task_id": tm.id}
+                self._tasks_status[tm.id] = {"state": "queued", "payload": {"manufacturer": tm.manufacturer, "model": tm.model}}
+                try:
+                    self._queue.put_nowait((tm.priority, tm.id, payload))
+                except Exception:
+                    continue
         finally:
             session.close()
 

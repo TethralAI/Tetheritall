@@ -57,6 +57,16 @@ def create_app() -> FastAPI:
         await asyncio.to_thread(coordinator._update_task_state, task_id, "cancelled")
         return {"ok": True}
 
+    @app.post("/tasks/{task_id}/pause")
+    async def pause_task(task_id: str) -> Dict[str, Any]:
+        await asyncio.to_thread(coordinator._update_task_state, task_id, "paused")
+        return {"ok": True}
+
+    @app.post("/tasks/{task_id}/resume")
+    async def resume_task(task_id: str) -> Dict[str, Any]:
+        await asyncio.to_thread(coordinator._update_task_state, task_id, "queued")
+        return {"ok": True}
+
     @app.websocket("/updates")
     async def updates(ws: WebSocket) -> None:
         await ws.accept()
