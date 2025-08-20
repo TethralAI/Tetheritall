@@ -51,7 +51,8 @@ class _DemoScreenState extends State<DemoScreen> {
                 return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
               },
               autoSpawnEnabled: autoSpawn,
-              onStats: ({required int activeBeams, required double allowance01}) {
+              showHud: true,
+              onStats: ({required int activeBeams, required double allowance01, required double fps}) {
                 setState(() {
                   this.activeBeams = activeBeams;
                 });
