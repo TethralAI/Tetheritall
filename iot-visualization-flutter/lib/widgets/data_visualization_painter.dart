@@ -62,10 +62,12 @@ class DataVisualizationPainter extends CustomPainter {
 
   Picture? _cachedStars;
   Size? _cachedSize;
+  Image? _cachedImage;
 
   void _paintStarfield(Canvas canvas, Size size) {
-    if (_cachedStars != null && _cachedSize == size) {
-      canvas.drawPicture(_cachedStars!);
+    if (_cachedImage != null && _cachedSize == size) {
+      final dst = Offset.zero & size;
+      paintImage(canvas: canvas, rect: dst, image: _cachedImage!, fit: BoxFit.cover, filterQuality: FilterQuality.low);
       return;
     }
     final recorder = PictureRecorder();
@@ -80,9 +82,12 @@ class DataVisualizationPainter extends CustomPainter {
       paint.color = Colors.white.withOpacity(0.4 + rand.nextDouble() * 0.4);
       starCanvas.drawCircle(Offset(x, y), r, paint);
     }
-    _cachedStars = recorder.endRecording();
-    _cachedSize = size;
-    canvas.drawPicture(_cachedStars!);
+    final picture = recorder.endRecording();
+    picture.toImage(size.width.ceil(), size.height.ceil()).then((img) {
+      _cachedImage = img;
+      _cachedSize = size;
+    });
+    canvas.drawPicture(picture);
   }
 
   void _paintHub(Canvas canvas, Offset center, double radius) {
@@ -100,13 +105,23 @@ class DataVisualizationPainter extends CustomPainter {
 
   void _paintBeams(Canvas canvas, Offset center, double hubRadius, Size size) {
     final maxRadius = sqrt(size.width * size.width + size.height * size.height) / 2;
+    final beamPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..blendMode = BlendMode.plus;
+    final glowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..blendMode = BlendMode.plus;
     for (final beam in beams) {
       final widthBase = lerpDouble(1.5, 3.5, beam.intensity)! * beam.widthScale;
-      final huePaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
+      final alpha = lerpDouble(0.35, 0.9, beam.intensity)!;
+      beamPaint
         ..strokeWidth = widthBase
-        ..color = beam.color.withOpacity(lerpDouble(0.35, 0.9, beam.intensity)!);
+        ..color = beam.color.withOpacity(alpha);
+      glowPaint
+        ..strokeWidth = widthBase * (1.0 + 0.6 * beam.glowIntensity * globalGlowScale)
+        ..color = beam.color.withOpacity(0.18 * beam.intensity * beam.glowIntensity * globalGlowScale);
 
       final angle = beam.angleRadians;
       final dir = Offset(cos(angle), sin(angle));
@@ -126,23 +141,9 @@ class DataVisualizationPainter extends CustomPainter {
         segEnd = start;
       }
 
-      final path = Path()
-        ..moveTo(segStart.dx, segStart.dy)
-        ..lineTo(segEnd.dx, segEnd.dy);
-
-      // Draw gradient-like core by overdrawing multiple times with varying alpha
-      for (int i = 0; i < 3; i++) {
-        final t = i / 2.0;
-        final glow = beam.glowIntensity * globalGlowScale;
-        final alpha = (0.22 - t * 0.08) * beam.intensity * glow;
-        final pw = huePaint.strokeWidth * (1.0 + t * 0.7 * glow);
-        final p = Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeWidth = pw
-          ..color = beam.color.withOpacity(alpha.clamp(0.0, 1.0));
-        canvas.drawPath(path, p);
-      }
+      // Draw beam core and outer glow using additive blending
+      canvas.drawLine(segStart, segEnd, glowPaint);
+      canvas.drawLine(segStart, segEnd, beamPaint);
 
       // Particles traveling along the beam, constrained by head position
       final count = reduceMotion ? max(2, (particleCount / 2).floor()) : particleCount;
