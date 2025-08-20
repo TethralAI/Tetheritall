@@ -5,11 +5,11 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 import { Module } from '@nestjs/common';
-import { DeviceShadowService } from './device-shadow.service.js';
-let ShadowModule = class ShadowModule {
+import { EventBus } from './event-bus.js';
+let ObserveModule = class ObserveModule {
 };
-ShadowModule = __decorate([
-    Module({ providers: [DeviceShadowService], exports: [DeviceShadowService] })
-], ShadowModule);
-export { ShadowModule };
-//# sourceMappingURL=shadow.module.js.map
+ObserveModule = __decorate([
+    Module({ providers: [EventBus], exports: [EventBus] })
+], ObserveModule);
+export { ObserveModule };
+//# sourceMappingURL=observe.module.js.map
