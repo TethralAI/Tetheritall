@@ -307,6 +307,25 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     return (old + alpha * delta) % twoPi;
   }
 
+  // Performance-mode helpers
+  int _effectiveStarCount() {
+    switch (widget.performanceMode) {
+      case PerformanceMode.low:
+        return 80; // reduced from default ~140
+      case PerformanceMode.normal:
+        return 140;
+    }
+  }
+
+  double _effectiveGlowScale() {
+    switch (widget.performanceMode) {
+      case PerformanceMode.low:
+        return 0.7;
+      case PerformanceMode.normal:
+        return 1.0;
+    }
+  }
+
   bool get _shouldAutoSpawn => widget.autoSpawnEnabled;
 
   Duration get _effectiveSpawnInterval {
@@ -358,6 +377,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
                     reduceMotion: effectiveReduceMotion,
                     particleSizeRange: widget.particleSizeRange,
                     particleBlurRadius: widget.particleBlurRadius,
+                    starCount: _effectiveStarCount(),
+                    globalGlowScale: _effectiveGlowScale(),
                   ),
                 ),
               ),

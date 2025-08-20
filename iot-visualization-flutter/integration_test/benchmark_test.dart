@@ -20,6 +20,7 @@ void main() {
             autoSpawnEnabled: false,
             maxConcurrentBeams: 30,
             particleCount: 6,
+            performanceMode: PerformanceMode.low,
           ),
         ),
       ),
