@@ -90,9 +90,13 @@ class NetworkScanner:
             maybe(self._list_wifi_networks, self.consent_policy.allows("wifi")),
             maybe(self._discover_ble, self.consent_policy.allows("bluetooth")),
             maybe(self._list_audio_devices, self.consent_policy.allows("audio")),
+            maybe(self._discover_dnssd, self.consent_policy.allows("wifi")),
+            maybe(self._discover_bt_classic, self.consent_policy.allows("bt_classic")),
+            maybe(self._discover_lifx, self.consent_policy.allows("wifi")),
+            maybe(self._discover_yeelight, self.consent_policy.allows("wifi")),
             return_exceptions=True,
         )
-        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": [], "wifi": [], "ble": [], "audio": []}
+        local_discovery: Dict[str, Any] = {"mdns": [], "ssdp": [], "arp": [], "wifi": [], "ble": [], "audio": [], "dnssd": [], "bt_classic": [], "lifx": [], "yeelight": []}
         if isinstance(local[0], list):
             local_discovery["mdns"] = local[0]
         if isinstance(local[1], list):
@@ -105,6 +109,14 @@ class NetworkScanner:
             local_discovery["ble"] = local[4]
         if isinstance(local[5], list):
             local_discovery["audio"] = local[5]
+        if isinstance(local[6], list):
+            local_discovery["dnssd"] = local[6]
+        if isinstance(local[7], list):
+            local_discovery["bt_classic"] = local[7]
+        if isinstance(local[8], list):
+            local_discovery["lifx"] = local[8]
+        if isinstance(local[9], list):
+            local_discovery["yeelight"] = local[9]
 
         return {
             "summary": summary,
@@ -377,6 +389,34 @@ class NetworkScanner:
         try:
             from tools.vision.barcode import decode_barcodes
             return decode_barcodes(image_path)
+        except Exception:
+            return []
+
+    def _discover_dnssd(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.discovery.dnssd import discover_dnssd
+            return discover_dnssd()
+        except Exception:
+            return []
+
+    def _discover_bt_classic(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.bluetooth.classic import discover_bt_classic
+            return discover_bt_classic()
+        except Exception:
+            return []
+
+    def _discover_lifx(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.lan.lifx import discover_lifx
+            return discover_lifx()
+        except Exception:
+            return []
+
+    def _discover_yeelight(self) -> List[Dict[str, Any]]:
+        try:
+            from tools.lan.yeelight import discover_yeelight
+            return discover_yeelight()
         except Exception:
             return []
 
