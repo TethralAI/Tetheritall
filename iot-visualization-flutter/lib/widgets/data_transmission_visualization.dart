@@ -42,6 +42,8 @@ class DataTransmissionVisualization extends StatefulWidget {
     this.manualYawRadians,
     this.beamStyleResolver,
     this.onStats,
+    this.showHud = false,
+    this.hudTextStyle,
   });
 
   final OnDataEvent? onDataEvent;
@@ -67,7 +69,9 @@ class DataTransmissionVisualization extends StatefulWidget {
   final PerformanceMode performanceMode;
   final double? manualYawRadians;
   final BeamStyle Function({required bool isOutgoing, String? deviceId})? beamStyleResolver;
-  final void Function({required int activeBeams, required double allowance01})? onStats;
+  final void Function({required int activeBeams, required double allowance01, required double fps})? onStats;
+  final bool showHud;
+  final TextStyle? hudTextStyle;
 
   @override
   State<DataTransmissionVisualization> createState() => _DataTransmissionVisualizationState();
@@ -101,6 +105,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   final Map<String, DeviceLocation> _devicePositions = <String, DeviceLocation>{};
   double _dataAllowance01 = 1.0; // 0..1 user-adjusted allowance
   bool _autoSpawnEnabledOverride;
+  double _fpsEma = 0.0;
 
   @override
   void initState() {
@@ -127,6 +132,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
           : (elapsed.inMicroseconds - _lastTickMs!) / 1e6;
       _lastTickMs = elapsed.inMicroseconds;
       final double step = dt.clamp(0.0, 0.05);
+      if (step > 0) {
+        final instFps = 1.0 / step;
+        _fpsEma = _fpsEma == 0.0 ? instFps : (_fpsEma * 0.9 + instFps * 0.1);
+      }
       _advanceBeams(step);
       _phase = (_phase + step / 2.0) % 1.0;
       if (mounted) setState(() {});
@@ -329,7 +338,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     _beams.removeWhere((b) => b.isComplete);
 
     // Stats callback
-    widget.onStats?.call(activeBeams: _beams.length, allowance01: _dataAllowance01);
+    widget.onStats?.call(activeBeams: _beams.length, allowance01: _dataAllowance01, fps: _fpsEma);
   }
 
   double _smoothAngle(double old, double next, double alpha) {
@@ -416,6 +425,23 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
               ),
             ),
           ),
+          if (widget.showHud)
+            Positioned(
+              left: 12,
+              top: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(0.15)),
+                ),
+                child: DefaultTextStyle(
+                  style: widget.hudTextStyle ?? const TextStyle(fontSize: 12, color: Colors.white70),
+                  child: Text('FPS: ${_fpsEma.toStringAsFixed(0)}  Beams: ${_beams.length}  Allow: ${( _dataAllowance01 * 100).round()}%'),
+                ),
+              ),
+            ),
           Positioned(
             right: 16,
             bottom: 16,
