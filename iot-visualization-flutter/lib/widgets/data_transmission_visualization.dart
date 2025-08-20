@@ -109,6 +109,10 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   int _lastAccelUs = 0;
   int _lastMagUs = 0;
   int _sensorMinIntervalUs = (1000000 / 60).round();
+  // Token bucket for spawn scheduling
+  double _spawnTokens = 0.0;
+  double _spawnRatePerSec = 4.0; // default ~ every 250ms
+  final double _maxSpawnTokens = 6.0;
 
   @override
   void initState() {
@@ -297,6 +301,8 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
   void _maybeSpawnBeam() {
     final allowedMax = max(1, (widget.maxConcurrentBeams * (_dataAllowance01 * 0.9 + 0.1)).floor());
     if (_beams.length >= allowedMax) return;
+    if (_spawnTokens < 1.0) return;
+    _spawnTokens -= 1.0;
     final isOutgoing = _rand.nextBool();
     _spawnBeam(isOutgoing: isOutgoing);
   }
@@ -358,16 +364,26 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     }
 
     // Smooth angle toward target for active device-tracked beams
+    // Token bucket refill (tied to allowance and fps)
+    final fpsFactor = (_fpsEma <= 1 ? 1.0 : min(1.0, _fpsEma / 60.0));
+    _spawnRatePerSec = max(1.0, 4.0 * (_dataAllowance01 * 0.9 + 0.1) * fpsFactor);
+    _spawnTokens = min(_maxSpawnTokens, _spawnTokens + _spawnRatePerSec * dtSeconds);
+
     for (final beam in _beams) {
-      // Ease progress and direction
+      // Progress
       beam.progress += beam.speed * widget.globalSpeedScale * dtSeconds;
-      final ease = 1.0 - pow(0.001, dtSeconds).toDouble(); // roughly 100-200ms time constant
+      // Spring-based angle easing: critically damped
       final current = beam.angleRadians;
       final target = beam.targetAngleRadians;
       const twoPi = pi * 2;
       var delta = (target - current) % twoPi;
       if (delta > pi) delta -= twoPi;
-      beam.angleRadians = (current + ease * delta) % twoPi;
+      // Spring params
+      const double omega = 12.0; // stiffness
+      const double zeta = 1.0; // critical damping
+      final double accel = -omega * omega * delta - 2.0 * zeta * omega * beam.angleVelocityRadiansPerSec;
+      beam.angleVelocityRadiansPerSec += accel * dtSeconds;
+      beam.angleRadians = (current + beam.angleVelocityRadiansPerSec * dtSeconds) % twoPi;
     }
     _beams.removeWhere((b) => b.isComplete);
 
