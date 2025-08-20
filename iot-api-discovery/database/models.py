@@ -1,0 +1,66 @@
+"""
+SQLAlchemy ORM models for IoT API Discovery
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import declarative_base, relationship
+
+
+Base = declarative_base()
+
+
+class Device(Base):
+    __tablename__ = "devices"
+
+    id = Column(Integer, primary_key=True)
+    model = Column(String(255), nullable=False, index=True)
+    manufacturer = Column(String(255), nullable=False, index=True)
+    firmware_version = Column(String(255), nullable=True)
+    last_scanned = Column(DateTime, default=None, nullable=True)
+
+    api_endpoints = relationship("ApiEndpoint", back_populates="device", cascade="all, delete-orphan")
+    scan_results = relationship("ScanResult", back_populates="device", cascade="all, delete-orphan")
+    auth_methods = relationship("AuthenticationMethod", back_populates="device", cascade="all, delete-orphan")
+
+
+class ApiEndpoint(Base):
+    __tablename__ = "api_endpoints"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    url = Column(Text, nullable=False)
+    method = Column(String(16), default="GET", nullable=False)
+    auth_required = Column(Boolean, default=False, nullable=False)
+    success_rate = Column(Float, default=0.0, nullable=False)
+
+    device = relationship("Device", back_populates="api_endpoints")
+
+
+class ScanResult(Base):
+    __tablename__ = "scan_results"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    agent_type = Column(String(64), nullable=False)
+    raw_data = Column(Text, nullable=False)
+
+    device = relationship("Device", back_populates="scan_results")
+
+
+class AuthenticationMethod(Base):
+    __tablename__ = "authentication_methods"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    auth_type = Column(String(64), nullable=False)
+    credentials = Column(Text, nullable=True)
+    success_rate = Column(Float, default=0.0, nullable=False)
+
+    device = relationship("Device", back_populates="auth_methods")
+
