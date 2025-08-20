@@ -1,0 +1,25 @@
+name: iot_visualization
+description: Reusable Flutter widget to visualize real-time IoT data transmission with animated beams and starfield background.
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ">=3.1.0 <4.0.0"
+  flutter: ">=3.13.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  sensors_plus: ^3.0.0
+  vector_math: ^2.1.4
+  visibility_detector: ^0.4.0+2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
