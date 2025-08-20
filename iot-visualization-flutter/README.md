@@ -73,3 +73,8 @@ controller.onDataReceived('thermo', 1.0, const DeviceLocation(x: -1, y: 0.5));
 - Aims for 60fps with 20–50 beams via efficient `CustomPainter`
 - Toggle starfield with `enableStarfield`
 - Control visual intensity via `intensityScale`
+- Auto-spawn beams: `autoSpawnEnabled` (disable for production)
+- FPS control: `targetFps`
+- Themes: `presetTheme` or supply `hubGradient`
+- Particle controls: `particleSizeRange`, `particleBlurRadius`, `particleCount`
+- Orientation: accelerometer + magnetometer fusion, `manualYawRadians` override
