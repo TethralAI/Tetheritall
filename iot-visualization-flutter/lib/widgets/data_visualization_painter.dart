@@ -19,6 +19,8 @@ class DataVisualizationPainter extends CustomPainter {
     required this.particleBlurRadius,
     required this.starCount,
     required this.globalGlowScale,
+    required this.useDrawPoints,
+    required this.resolutionScale,
   });
 
   final List<DataBeam> beams;
@@ -33,6 +35,8 @@ class DataVisualizationPainter extends CustomPainter {
   final double particleBlurRadius;
   final int starCount;
   final double globalGlowScale;
+  final bool useDrawPoints;
+  final double resolutionScale;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -114,7 +118,7 @@ class DataVisualizationPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..blendMode = BlendMode.plus;
     for (final beam in beams) {
-      final widthBase = lerpDouble(1.5, 3.5, beam.intensity)! * beam.widthScale;
+      final widthBase = lerpDouble(1.5, 3.5, beam.intensity)! * beam.widthScale * resolutionScale;
       final alpha = lerpDouble(0.35, 0.9, beam.intensity)!;
       beamPaint
         ..strokeWidth = widthBase
@@ -147,19 +151,54 @@ class DataVisualizationPainter extends CustomPainter {
 
       // Particles traveling along the beam, constrained by head position
       final count = reduceMotion ? max(2, (particleCount / 2).floor()) : particleCount;
-      for (int i = 0; i < count; i++) {
-        final base = (i / particleCount + deviceParticlesPhase) % 1.0;
-        final along = beam.isOutgoing ? base : (1 - base);
-        if (along > clampedProgress) continue; // do not render beyond head
-        final particlePos = Offset.lerp(start, end, along)!;
-        final fade = beam.isOutgoing ? (1 - along) : along;
-        final particlePaint = Paint()
-          ..color = beam.color.withOpacity(0.25 + 0.5 * fade)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, particleBlurRadius);
-        final radiusMin = particleSizeRange.width;
-        final radiusMax = particleSizeRange.height;
-        final radius = radiusMin + (radiusMax - radiusMin) * fade;
-        canvas.drawCircle(particlePos, radius, particlePaint);
+      if (useDrawPoints) {
+        final List<Offset> small = [];
+        final List<Offset> large = [];
+        final baseOpacity = 0.5;
+        for (int i = 0; i < count; i++) {
+          final base = (i / particleCount + deviceParticlesPhase) % 1.0;
+          final along = beam.isOutgoing ? base : (1 - base);
+          if (along > clampedProgress) continue;
+          final pos = Offset.lerp(start, end, along)!;
+          final fade = beam.isOutgoing ? (1 - along) : along;
+          if (fade < 0.5) {
+            small.add(pos);
+          } else {
+            large.add(pos);
+          }
+        }
+        if (small.isNotEmpty) {
+          final p = Paint()
+            ..color = beam.color.withOpacity(0.25 + baseOpacity * 0.5)
+            ..strokeCap = StrokeCap.round
+            ..strokeWidth = particleSizeRange.width * resolutionScale
+            ..blendMode = BlendMode.plus;
+          canvas.drawPoints(PointMode.points, small, p);
+        }
+        if (large.isNotEmpty) {
+          final p = Paint()
+            ..color = beam.color.withOpacity(0.25 + baseOpacity * 0.8)
+            ..strokeCap = StrokeCap.round
+            ..strokeWidth = particleSizeRange.height * resolutionScale
+            ..blendMode = BlendMode.plus;
+          canvas.drawPoints(PointMode.points, large, p);
+        }
+      } else {
+        for (int i = 0; i < count; i++) {
+          final base = (i / particleCount + deviceParticlesPhase) % 1.0;
+          final along = beam.isOutgoing ? base : (1 - base);
+          if (along > clampedProgress) continue; // do not render beyond head
+          final particlePos = Offset.lerp(start, end, along)!;
+          final fade = beam.isOutgoing ? (1 - along) : along;
+          final particlePaint = Paint()
+            ..color = beam.color.withOpacity(0.25 + 0.5 * fade)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, particleBlurRadius)
+            ..blendMode = BlendMode.plus;
+          final radiusMin = particleSizeRange.width * resolutionScale;
+          final radiusMax = particleSizeRange.height * resolutionScale;
+          final radius = radiusMin + (radiusMax - radiusMin) * fade;
+          canvas.drawCircle(particlePos, radius, particlePaint);
+        }
       }
     }
   }
