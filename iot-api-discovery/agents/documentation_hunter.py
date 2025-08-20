@@ -6,9 +6,15 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 from typing import Any, Dict, List, Optional, Tuple
+import time
+from urllib.parse import urlparse, urljoin
+import urllib.robotparser as robotparser
 
 import aiohttp
 from bs4 import BeautifulSoup
+from pydantic import BaseModel
+
+from .schemas import DiscoveryResult, Endpoint, AuthenticationMethod, Example
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +29,10 @@ class DocumentationHunterConfig:
     rate_limit_per_second: float = 2.0
     manufacturer_tlds: List[str] = None  # type: ignore[assignment]
     manufacturer_path_hints: List[str] = None  # type: ignore[assignment]
+    serpapi_key: Optional[str] = None
+    per_domain_rate_limit_per_second: float = 1.0
+    respect_robots_txt: bool = True
+    user_agent: str = "IoT-API-Discovery/1.0 (+github.com/example)"
 
     def __post_init__(self) -> None:
         if self.manufacturer_tlds is None:
@@ -52,11 +62,15 @@ class DocumentationHunter:
         self._session = session
         self._session_owner = session is None
         self._semaphore = asyncio.Semaphore(self.config.max_concurrent_requests)
+        self._domain_last_request_time: Dict[str, float] = {}
+        self._robots_parsers: Dict[str, robotparser.RobotFileParser] = {}
+        self._cache_text: Dict[str, Dict[str, Any]] = {}
+        self._cache_json: Dict[str, Dict[str, Any]] = {}
 
     async def __aenter__(self) -> "DocumentationHunter":
         if self._session is None:
             timeout = aiohttp.ClientTimeout(total=self.config.request_timeout_seconds)
-            headers = {}
+            headers = {"User-Agent": self.config.user_agent}
             if self.config.github_token:
                 headers["Authorization"] = f"Bearer {self.config.github_token}"
             self._session = aiohttp.ClientSession(timeout=timeout, headers=headers)
@@ -75,11 +89,6 @@ class DocumentationHunter:
     async def discover(self) -> Dict[str, Any]:
         """
         Orchestrate discovery across sources and return structured results.
-
-        Returns
-        -------
-        Dict[str, Any]
-            Structured discovery data including endpoints, auth methods, and references.
         """
         logger.info("Starting documentation discovery for %s %s", self.manufacturer, self.model or "")
         results: Dict[str, Any] = {
@@ -91,15 +100,12 @@ class DocumentationHunter:
             "examples": [],
         }
 
-        # Run discovery subtasks concurrently
         tasks = [self._search_github(), self._scrape_manufacturer_site(), self._search_forums()]
-
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
         for item in gathered:
             if isinstance(item, Exception):
                 logger.warning("A discovery subtask failed: %s", item)
                 continue
-            # Merge partial results
             for key, value in item.items():
                 if key in ("endpoints", "authentication_methods", "examples"):
                     results[key].extend(value)  # type: ignore[arg-type]
@@ -108,10 +114,31 @@ class DocumentationHunter:
                 else:
                     results[key] = value
 
-        return results
+        dr = DiscoveryResult(
+            manufacturer=results["manufacturer"],
+            model=results["model"],
+            sources=results["sources"],
+            endpoints=[Endpoint(**e) for e in results["endpoints"]],
+            authentication_methods=[AuthenticationMethod(**a) for a in results["authentication_methods"]],
+            examples=[Example(**ex) for ex in results["examples"]],
+        )
+        return dr.model_dump()
 
     async def _rate_limited(self) -> None:
         await asyncio.sleep(1.0 / max(self.config.rate_limit_per_second, 0.1))
+
+    async def _domain_rate_limit(self, url: str) -> None:
+        if self.config.per_domain_rate_limit_per_second <= 0:
+            return
+        domain = urlparse(url).netloc
+        now = time.monotonic()
+        min_interval = 1.0 / self.config.per_domain_rate_limit_per_second
+        last = self._domain_last_request_time.get(domain)
+        if last is not None:
+            elapsed = now - last
+            if elapsed < min_interval:
+                await asyncio.sleep(min_interval - elapsed)
+        self._domain_last_request_time[domain] = time.monotonic()
 
     async def _search_github(self) -> Dict[str, Any]:
         await self._rate_limited()
@@ -121,7 +148,6 @@ class DocumentationHunter:
         query_terms: List[str] = [self.manufacturer]
         if self.model:
             query_terms.append(self.model)
-        # Helpful qualifiers
         query_terms.extend(["integration OR plugin OR library", "(\"home assistant\" OR openhab OR iot)"])
         q = " ".join(query_terms)
         params = {"q": q, "per_page": 10, "sort": "stars", "order": "desc"}
@@ -142,7 +168,6 @@ class DocumentationHunter:
         except Exception as exc:
             logger.warning("GitHub search failed: %s", exc)
 
-        # Heuristic extraction of endpoints/auth from repository descriptions
         endpoints: List[Dict[str, Any]] = []
         auth_methods: List[Dict[str, Any]] = []
         examples: List[Dict[str, Any]] = []
@@ -173,6 +198,9 @@ class DocumentationHunter:
         examples: List[Dict[str, Any]] = []
 
         async def scan_url(url: str) -> None:
+            if self.config.respect_robots_txt and not await self._is_allowed_by_robots(url):
+                pages_scanned.append({"url": url, "skipped": "robots_txt"})
+                return
             try:
                 html = await self._fetch_text("GET", url)
             except Exception as exc:
@@ -181,6 +209,15 @@ class DocumentationHunter:
             soup = BeautifulSoup(html or "", "html.parser")
             text = soup.get_text("\n")
             extracted = self._extract_from_text(text, source=url)
+
+            api_links = self._find_api_spec_links(soup, base_url=url)
+            for link in api_links:
+                spec_endpoints, spec_auth = await self._fetch_and_parse_api_spec(link)
+                for ep in spec_endpoints:
+                    endpoints.append(ep)
+                for am in spec_auth:
+                    auth_methods.append(am)
+
             pages_scanned.append({"url": url, "found_endpoints": len(extracted["endpoints"])})
             endpoints.extend(extracted["endpoints"])  # type: ignore[index]
             auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
@@ -240,7 +277,6 @@ class DocumentationHunter:
 
         await asyncio.gather(*(fetch_forum(n, u) for n, u in forums.items()))
 
-        # Extract endpoints/auth from titles as hints
         endpoints: List[Dict[str, Any]] = []
         auth_methods: List[Dict[str, Any]] = []
         examples: List[Dict[str, Any]] = []
@@ -251,6 +287,33 @@ class DocumentationHunter:
             auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
             examples.extend(extracted["examples"])  # type: ignore[index]
 
+        async def enrich_forum_items(items: List[Dict[str, Any]]) -> None:
+            async def fetch_body(item: Dict[str, Any]) -> None:
+                try:
+                    url = item.get("url", "")
+                    if not url:
+                        return
+                    parts = url.rstrip("/").split("/")
+                    tid = parts[-1]
+                    topic_json_url = "/".join(parts[:-2]) + f"/t/{tid}.json"
+                    data = await self._fetch_json("GET", topic_json_url)
+                    if not data:
+                        return
+                    posts = data.get("post_stream", {}).get("posts", [])
+                    if posts:
+                        cooked = posts[0].get("cooked") or ""
+                        text = BeautifulSoup(cooked, "html.parser").get_text("\n")
+                        extracted = self._extract_from_text(text, source=item.get("url", "forums"))
+                        endpoints.extend(extracted["endpoints"])  # type: ignore[index]
+                        auth_methods.extend(extracted["authentication_methods"])  # type: ignore[index]
+                        examples.extend(extracted["examples"])  # type: ignore[index]
+                except Exception:
+                    return
+
+            await asyncio.gather(*(fetch_body(it) for it in items[:5]))
+
+        await enrich_forum_items(results)
+
         self._log_discoveries(endpoints, auth_methods, examples)
 
         return {
@@ -260,7 +323,6 @@ class DocumentationHunter:
             "examples": examples,
         }
 
-    # ---------------------- HTTP helpers with retry ----------------------
     async def _fetch_json(
         self,
         method: str,
@@ -269,11 +331,27 @@ class DocumentationHunter:
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        resp = await self._attempt_request(method, url, params=params, headers=headers)
+        effective_headers = dict(headers or {})
+        cache_entry = self._cache_json.get(url)
+        if cache_entry:
+            if etag := cache_entry.get("etag"):
+                effective_headers["If-None-Match"] = etag
+            if last_mod := cache_entry.get("last_modified"):
+                effective_headers["If-Modified-Since"] = last_mod
+        await self._domain_rate_limit(url)
+        resp = await self._attempt_request(method, url, params=params, headers=effective_headers)
         if resp is None:
-            return {}
+            return cache_entry.get("data", {}) if cache_entry else {}
         try:
-            return await resp.json()
+            if resp.status == 304 and cache_entry:
+                return cache_entry.get("data", {})
+            data = await resp.json()
+            self._cache_json[url] = {
+                "etag": resp.headers.get("ETag"),
+                "last_modified": resp.headers.get("Last-Modified"),
+                "data": data,
+            }
+            return data
         finally:
             await resp.release()
 
@@ -284,12 +362,33 @@ class DocumentationHunter:
         *,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
+        skip_robots: bool = False,
     ) -> str:
-        resp = await self._attempt_request(method, url, params=params, headers=headers)
+        if self.config.respect_robots_txt and not skip_robots:
+            allowed = await self._is_allowed_by_robots(url)
+            if not allowed:
+                raise PermissionError(f"robots.txt disallows fetching {url}")
+        effective_headers = dict(headers or {})
+        cache_entry = self._cache_text.get(url)
+        if cache_entry:
+            if etag := cache_entry.get("etag"):
+                effective_headers["If-None-Match"] = etag
+            if last_mod := cache_entry.get("last_modified"):
+                effective_headers["If-Modified-Since"] = last_mod
+        await self._domain_rate_limit(url)
+        resp = await self._attempt_request(method, url, params=params, headers=effective_headers)
         if resp is None:
-            return ""
+            return cache_entry.get("text", "") if cache_entry else ""
         try:
-            return await resp.text()
+            if resp.status == 304 and cache_entry:
+                return cache_entry.get("text", "")
+            text = await resp.text()
+            self._cache_text[url] = {
+                "etag": resp.headers.get("ETag"),
+                "last_modified": resp.headers.get("Last-Modified"),
+                "text": text,
+            }
+            return text
         finally:
             await resp.release()
 
@@ -333,13 +432,31 @@ class DocumentationHunter:
 
         return None
 
-    # ---------------------- Extraction helpers ----------------------
+    async def _is_allowed_by_robots(self, url: str) -> bool:
+        if not self.config.respect_robots_txt:
+            return True
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        rp = self._robots_parsers.get(domain)
+        if rp is None:
+            robots_url = f"{parsed.scheme}://{domain}/robots.txt"
+            try:
+                content = await self._fetch_text("GET", robots_url, skip_robots=True)
+            except Exception:
+                self._robots_parsers[domain] = robotparser.RobotFileParser()
+                self._robots_parsers[domain].parse("")
+                return True
+            rp = robotparser.RobotFileParser()
+            rp.set_url(robots_url)
+            rp.parse(content.splitlines())
+            self._robots_parsers[domain] = rp
+        return rp.can_fetch(self.config.user_agent, url)
+
     def _extract_from_text(self, text: str, *, source: str) -> Dict[str, List[Dict[str, Any]]]:
         endpoints: List[Dict[str, Any]] = []
         auth_methods: List[Dict[str, Any]] = []
         examples: List[Dict[str, Any]] = []
 
-        # Endpoint patterns: /api/... or /v1/... and full URLs with api segments
         path_pattern = re.compile(r"(?P<method>GET|POST|PUT|DELETE|PATCH|OPTIONS)?\s*(?P<path>/(?:api|v\d+)(?:/[A-Za-z0-9_\-\.]+)+)")
         url_pattern = re.compile(r"https?://[^\s\'\"]*(?:/api(?:/[^\s\'\"]*)*)")
         for match in path_pattern.finditer(text):
@@ -363,7 +480,6 @@ class DocumentationHunter:
                 }
             )
 
-        # Authentication hints
         auth_hints = {
             "oauth2": r"oauth\s*2(\.0)?|oauth2",
             "api_key": r"api\s*key|x-api-key|apikey",
@@ -384,14 +500,12 @@ class DocumentationHunter:
                     }
                 )
 
-        # Example code snippets: detect curl or code fences
         code_snippets: List[str] = []
         for m in re.finditer(r"```[a-zA-Z0-9]*\n([\s\S]*?)```", text):
             snippet = m.group(1).strip()
             if snippet:
                 code_snippets.append(snippet[:2000])
         for m in re.finditer(r"\bcurl\s+-[a-zA-Z]", text):
-            # capture surrounding line
             start = max(0, m.start() - 50)
             end = min(len(text), m.end() + 200)
             code_snippets.append(text[start:end])
@@ -427,14 +541,12 @@ class DocumentationHunter:
                 urls.append(base)
                 for path in self.config.manufacturer_path_hints:
                     urls.append(base + path)
-        # De-duplicate while preserving order
         seen: set[str] = set()
         ordered: List[str] = []
         for u in urls:
             if u not in seen:
                 seen.add(u)
                 ordered.append(u)
-        # Limit to a reasonable number
         return ordered[:20]
 
     def _log_discoveries(
@@ -450,3 +562,82 @@ class DocumentationHunter:
             logger.info("[%s] auth: %s (source=%s)", timestamp, am.get("type"), am.get("source"))
         for ex in examples[:5]:
             logger.info("[%s] example from %s", timestamp, ex.get("source"))
+
+    def _find_api_spec_links(self, soup: BeautifulSoup, *, base_url: str) -> List[str]:
+        patterns = [
+            re.compile(r"openapi\.(json|yaml|yml)$", re.I),
+            re.compile(r"swagger\.(json|yaml|yml)$", re.I),
+            re.compile(r"postman(_collection)?\.(json)$", re.I),
+            re.compile(r"/openapi\.json$", re.I),
+            re.compile(r"/swagger\.json$", re.I),
+        ]
+        links: List[str] = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            for pat in patterns:
+                if pat.search(href):
+                    if href.startswith("http"):
+                        links.append(href)
+                    else:
+                        try:
+                            links.append(urljoin(base_url, href))
+                        except Exception:
+                            continue
+                    break
+        return links[:10]
+
+    async def _fetch_and_parse_api_spec(self, url: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        try:
+            text = await self._fetch_text("GET", url)
+        except Exception as exc:
+            logger.debug("Failed to fetch API spec %s: %s", url, exc)
+            return [], []
+
+        try:
+            import json as _json
+            import yaml as _yaml
+
+            data: Dict[str, Any]
+            if url.endswith((".yaml", ".yml")):
+                data = _yaml.safe_load(text)  # type: ignore[assignment]
+            else:
+                data = _json.loads(text)
+        except Exception as exc:
+            logger.debug("Failed to parse API spec %s: %s", url, exc)
+            return [], []
+
+        endpoints: List[Dict[str, Any]] = []
+        auth_methods: List[Dict[str, Any]] = []
+
+        if "paths" in data:
+            for path, methods in data.get("paths", {}).items():
+                if not isinstance(methods, dict):
+                    continue
+                for method, op in methods.items():
+                    if method.upper() not in {"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}:
+                        continue
+                    endpoints.append(
+                        {
+                            "path": path,
+                            "method": method.upper(),
+                            "source": url,
+                            "discovered_at": datetime.utcnow().isoformat() + "Z",
+                            "description": (op or {}).get("summary"),
+                        }
+                    )
+
+        components = data.get("components", {}) if isinstance(data, dict) else {}
+        security_schemes = components.get("securitySchemes", {}) if isinstance(components, dict) else {}
+        for name, scheme in security_schemes.items() if isinstance(security_schemes, dict) else []:
+            t = (scheme or {}).get("type")
+            details = {k: v for k, v in (scheme or {}).items() if k != "type"}
+            auth_methods.append(
+                {
+                    "type": str(t) if t else name,
+                    "details": details,
+                    "source": url,
+                    "discovered_at": datetime.utcnow().isoformat() + "Z",
+                }
+            )
+
+        return endpoints, auth_methods
