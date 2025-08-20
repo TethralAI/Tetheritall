@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:iot_visualization/iot_visualization.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const DemoApp());
@@ -32,6 +33,34 @@ class _DemoScreenState extends State<DemoScreen> {
   DeviceLocation thermoLoc = const DeviceLocation(x: -1, y: 0.5);
   bool autoSpawn = true;
   int activeBeams = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedAllowance = prefs.getDouble('allowance') ?? allowance;
+    final savedAutoSpawn = prefs.getBool('autoSpawn') ?? autoSpawn;
+    setState(() {
+      allowance = savedAllowance;
+      autoSpawn = savedAutoSpawn;
+    });
+    controller.setDataAllowance(allowance);
+    controller.setAutoSpawnEnabled(autoSpawn);
+  }
+
+  Future<void> _saveAllowance(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('allowance', v);
+  }
+
+  Future<void> _saveAutoSpawn(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('autoSpawn', v);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +100,7 @@ class _DemoScreenState extends State<DemoScreen> {
                     onChanged: (v) {
                       setState(() => allowance = v);
                       controller.setDataAllowance(v);
+                      _saveAllowance(v);
                     },
                   ),
                   Row(
@@ -81,6 +111,7 @@ class _DemoScreenState extends State<DemoScreen> {
                         onChanged: (v) {
                           setState(() => autoSpawn = v);
                           controller.setAutoSpawnEnabled(v);
+                          _saveAutoSpawn(v);
                         },
                       ),
                       const SizedBox(width: 8),
