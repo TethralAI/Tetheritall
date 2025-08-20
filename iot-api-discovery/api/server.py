@@ -19,6 +19,9 @@ from tools.tuya.cloud import list_devices as tuya_list
 from tools.notify.fcm import send_fcm_legacy
 from tools.cloud.aws import upload_s3
 from tools.iac.hcp_terraform import trigger_run as tf_trigger
+from tools.home_assistant.local import list_entities as ha_list, call_service as ha_call
+from tools.google.nest_sdm import list_devices as nest_list
+from tools.hue.remote import list_resources as hue_list
 
 
 class ScanRequest(BaseModel):
@@ -195,6 +198,39 @@ def create_app() -> FastAPI:
         if fmt == "yaml":
             return {"format": "yaml", "content": yaml.safe_dump(data)}
         return {"format": "json", "content": data}
+
+    # Home Assistant local
+    @app.get("/integrations/home_assistant/entities", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def home_assistant_entities() -> Dict[str, Any]:
+        if not (settings.home_assistant_base_url and settings.home_assistant_token):
+            return {"count": 0, "entities": []}
+        items = await asyncio.to_thread(ha_list, settings.home_assistant_base_url, settings.home_assistant_token)
+        return {"count": len(items), "entities": items}
+
+    class HACallIn(BaseModel):
+        domain: str
+        service: str
+        payload: Dict[str, Any]
+
+    @app.post("/integrations/home_assistant/call", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def home_assistant_call(body: HACallIn) -> Dict[str, Any]:
+        if not (settings.home_assistant_base_url and settings.home_assistant_token):
+            return {"ok": False, "error": "missing HA config"}
+        return await asyncio.to_thread(ha_call, settings.home_assistant_base_url, settings.home_assistant_token, body.domain, body.service, body.payload)
+
+    # Google Nest SDM (placeholder; requires full setup)
+    @app.get("/integrations/google/nest/devices", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def google_nest_devices() -> Dict[str, Any]:
+        token = settings.google_nest_access_token or ""
+        items = await asyncio.to_thread(nest_list, token) if token else []
+        return {"count": len(items), "devices": items}
+
+    # Hue Remote API (placeholder)
+    @app.get("/integrations/hue/remote/resources", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def hue_remote_resources() -> Dict[str, Any]:
+        token = settings.hue_remote_token or ""
+        items = await asyncio.to_thread(hue_list, token) if token else []
+        return {"count": len(items), "resources": items}
 
 
     return app

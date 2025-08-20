@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     hcp_terraform_token: str | None = None
     hcp_terraform_org: str | None = None
     hcp_terraform_workspace_id: str | None = None
+    # Home Assistant local
+    home_assistant_base_url: str | None = None
+    home_assistant_token: str | None = None
+    # Google Nest SDM
+    google_nest_access_token: str | None = None
+    # Philips Hue Remote API (generic bearer token)
+    hue_remote_token: str | None = None
 
     class Config:
         env_file = ".env"
