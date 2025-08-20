@@ -29,6 +29,11 @@ class DataTransmissionController {
   void setDataAllowance(double allowance01) {
     _attachable?.setDataAllowance(allowance01);
   }
+
+  // Toggle automatic demo beam spawning at runtime
+  void setAutoSpawnEnabled(bool enabled) {
+    _attachable?.setAutoSpawnEnabled(enabled);
+  }
 }
 
 abstract class _Attachable {
@@ -36,6 +41,7 @@ abstract class _Attachable {
   void onDataReceived(String deviceId, double dataSize, DeviceLocation location);
   void updateDevicePosition(String deviceId, DeviceLocation location);
   void setDataAllowance(double allowance01);
+  void setAutoSpawnEnabled(bool enabled);
 }
 import '../models/device_location.dart';
 

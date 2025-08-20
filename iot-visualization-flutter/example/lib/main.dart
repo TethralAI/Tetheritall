@@ -30,6 +30,8 @@ class _DemoScreenState extends State<DemoScreen> {
   double allowance = 1.0;
   DeviceLocation lampLoc = const DeviceLocation(x: 2, y: -1);
   DeviceLocation thermoLoc = const DeviceLocation(x: -1, y: 0.5);
+  bool autoSpawn = true;
+  int activeBeams = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +50,12 @@ class _DemoScreenState extends State<DemoScreen> {
                 if (deviceId == 'camera') return Colors.purpleAccent;
                 return isOutgoing ? const Color(0xFF00E5FF) : const Color(0xFFFFA726);
               },
+              autoSpawnEnabled: autoSpawn,
+              onStats: ({required int activeBeams, required double allowance01}) {
+                setState(() {
+                  this.activeBeams = activeBeams;
+                });
+              },
             ),
             Positioned(
               left: 12,
@@ -63,6 +71,22 @@ class _DemoScreenState extends State<DemoScreen> {
                       setState(() => allowance = v);
                       controller.setDataAllowance(v);
                     },
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Switch(
+                        value: autoSpawn,
+                        onChanged: (v) {
+                          setState(() => autoSpawn = v);
+                          controller.setAutoSpawnEnabled(v);
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Auto-spawn'),
+                      const SizedBox(width: 16),
+                      Text('Active beams: $activeBeams'),
+                    ],
                   ),
                   Wrap(
                     alignment: WrapAlignment.center,
