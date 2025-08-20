@@ -4,20 +4,22 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-import { Module } from '@nestjs/common';
-import { IngestController } from './ingest.controller.js';
-import { PrivacyModule } from '../privacy/privacy.module.js';
-import { EventBus } from '../observe/event-bus.js';
-import { WsGateway } from './ws.gateway.js';
-let IoModule = class IoModule {
+import { Injectable } from '@nestjs/common';
+let IdempotencyService = class IdempotencyService {
+    seen = new Set();
+    key(deviceId, idempotencyKey) {
+        return `${deviceId}:${idempotencyKey}`;
+    }
+    checkAndRecord(deviceId, idempotencyKey) {
+        const k = this.key(deviceId, idempotencyKey);
+        if (this.seen.has(k))
+            return false;
+        this.seen.add(k);
+        return true;
+    }
 };
-IoModule = __decorate([
-    Module({
-        imports: [PrivacyModule],
-        controllers: [IngestController],
-        providers: [EventBus, WsGateway],
-        exports: [EventBus],
-    })
-], IoModule);
-export { IoModule };
-//# sourceMappingURL=io.module.js.map
+IdempotencyService = __decorate([
+    Injectable()
+], IdempotencyService);
+export { IdempotencyService };
+//# sourceMappingURL=idempotency.service.js.map
