@@ -188,6 +188,20 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
     if (oldWidget.targetFps != widget.targetFps) {
       _targetFrameIntervalMs = 1000 / widget.targetFps.clamp(15, 120);
     }
+
+    // Auto-tune using frame timing reports
+    WidgetsBinding.instance.platformDispatcher.onReportTimings = (List<FrameTiming> timings) {
+      if (timings.isEmpty) return;
+      final avg = timings.map((t) => t.totalSpan.inMicroseconds).reduce((a, b) => a + b) / timings.length;
+      final avgMs = avg / 1000.0;
+      // If average frame exceeds budget by 25% for a while, we can suggest degradation via performanceMode/allowance
+      if (avgMs > _targetFrameIntervalMs * 1.25) {
+        // Nudge internal factors
+        _autoDegrade();
+      } else if (avgMs < _targetFrameIntervalMs * 0.9) {
+        _autoRecover();
+      }
+    };
   }
 
   @override
@@ -251,7 +265,7 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
         if (beam.deviceId == deviceId) {
           final origin = const DeviceLocation(x: 0, y: 0);
           final worldAngle = origin.angleTo(location);
-          beam.angleRadians = worldAngle - _deviceYaw;
+          beam.targetAngleRadians = worldAngle - _deviceYaw;
         }
       }
     }
@@ -332,8 +346,17 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       }
     }
 
+    // Smooth angle toward target for active device-tracked beams
     for (final beam in _beams) {
+      // Ease progress and direction
       beam.progress += beam.speed * widget.globalSpeedScale * dtSeconds;
+      final ease = 1.0 - pow(0.001, dtSeconds).toDouble(); // roughly 100-200ms time constant
+      final current = beam.angleRadians;
+      final target = beam.targetAngleRadians;
+      const twoPi = pi * 2;
+      var delta = (target - current) % twoPi;
+      if (delta > pi) delta -= twoPi;
+      beam.angleRadians = (current + ease * delta) % twoPi;
     }
     _beams.removeWhere((b) => b.isComplete);
 
@@ -365,6 +388,16 @@ class _DataTransmissionVisualizationState extends State<DataTransmissionVisualiz
       case PerformanceMode.normal:
         return 1.0;
     }
+  }
+
+  void _autoDegrade() {
+    // Soften visuals: reduce allowance slightly to cap beams & intensity
+    _dataAllowance01 = max(0.3, _dataAllowance01 - 0.05);
+  }
+
+  void _autoRecover() {
+    // Restore visuals gradually
+    _dataAllowance01 = min(1.0, _dataAllowance01 + 0.03);
   }
 
   bool get _shouldAutoSpawn => _autoSpawnEnabledOverride;

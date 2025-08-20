@@ -12,9 +12,11 @@ class DataBeam {
     double? initialProgress,
     this.deviceId,
   })  : progress = initialProgress ?? 0.0,
-        angleRadians = angleRadians;
+        angleRadians = angleRadians,
+        targetAngleRadians = angleRadians;
 
   double angleRadians; // mutable to allow live direction tracking
+  double targetAngleRadians; // smoothed target for easing
   final bool isOutgoing;
   final double intensity; // 0..1 visual thickness/alpha multiplier
   final double speed; // logical speed factor, progress per second
