@@ -4,6 +4,10 @@ import { InMemoryDeviceStore, InMemoryShadowStore } from './memory.stores.js';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { DeviceEntity } from './entities/device.entity.js';
 import { DeviceShadowEntity } from './entities/device_shadow.entity.js';
+import { CommandLogEntity } from './entities/command_log.entity.js';
+import { EventEntity } from './entities/event.entity.js';
+import { SecurityEventEntity } from './entities/security_event.entity.js';
+import { PrivacyDecisionLogEntity } from './entities/privacy_decision_log.entity.js';
 import { OrmDeviceStore, OrmShadowStore } from './typeorm.stores.js';
 
 const ormProviders: Provider[] = [
@@ -25,10 +29,10 @@ const ormProviders: Provider[] = [
         TypeOrmModule.forRoot({
           type: 'postgres',
           url: process.env.DB_URL,
-          entities: [DeviceEntity, DeviceShadowEntity],
+          entities: [DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity],
           synchronize: true,
         }),
-        TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity]),
+        TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity]),
       ]
     : [],
   providers: process.env.DB_URL
