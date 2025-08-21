@@ -7,34 +7,32 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-import { Injectable } from '@nestjs/common';
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+import { Inject, Injectable } from '@nestjs/common';
 import { EventBus } from '../observe/event-bus.js';
+import { SHADOW_STORE } from '../db/store.tokens.js';
 let DeviceShadowService = class DeviceShadowService {
     bus;
-    shadows = new Map();
-    constructor(bus) {
+    store;
+    constructor(bus, store) {
         this.bus = bus;
+        this.store = store;
     }
     get(deviceId) {
-        return this.shadows.get(deviceId);
+        return this.store.get(deviceId);
     }
-    applyUpdate(deviceId, version, patch) {
-        const current = this.shadows.get(deviceId) ?? { version: 0, reported: {}, updatedAt: 0 };
-        if (version <= current.version)
-            return current;
-        const next = {
-            version,
-            reported: { ...current.reported, ...patch },
-            updatedAt: Date.now(),
-        };
-        this.shadows.set(deviceId, next);
+    async applyUpdate(deviceId, version, patch) {
+        const next = await this.store.applyUpdate(deviceId, version, patch);
         this.bus.emit({ type: 'conn.shadow.updated', deviceId, version: version, shadow: next });
         return next;
     }
 };
 DeviceShadowService = __decorate([
     Injectable(),
-    __metadata("design:paramtypes", [EventBus])
+    __param(1, Inject(SHADOW_STORE)),
+    __metadata("design:paramtypes", [EventBus, Object])
 ], DeviceShadowService);
 export { DeviceShadowService };
 //# sourceMappingURL=device-shadow.service.js.map

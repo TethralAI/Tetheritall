@@ -7,10 +7,11 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 import { Module } from '@nestjs/common';
 import { DeviceShadowService } from './device-shadow.service.js';
 import { ObserveModule } from '../observe/observe.module.js';
+import { DbModule } from '../db/db.module.js';
 let ShadowModule = class ShadowModule {
 };
 ShadowModule = __decorate([
-    Module({ imports: [ObserveModule], providers: [DeviceShadowService], exports: [DeviceShadowService] })
+    Module({ imports: [ObserveModule, DbModule], providers: [DeviceShadowService], exports: [DeviceShadowService] })
 ], ShadowModule);
 export { ShadowModule };
 //# sourceMappingURL=shadow.module.js.map

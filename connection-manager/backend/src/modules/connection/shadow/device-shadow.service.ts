@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { EventBus } from '../observe/event-bus.js';
+import { SHADOW_STORE } from '../db/store.tokens.js';
+import type { ShadowStore } from '../db/shadow.store.js';
 
 export interface ShadowEntry {
   version: number;
@@ -9,23 +11,14 @@ export interface ShadowEntry {
 
 @Injectable()
 export class DeviceShadowService {
-  private shadows = new Map<string, ShadowEntry>();
-  constructor(private readonly bus: EventBus) {}
+  constructor(private readonly bus: EventBus, @Inject(SHADOW_STORE) private readonly store: ShadowStore) {}
 
-  get(deviceId: string): ShadowEntry | undefined {
-    return this.shadows.get(deviceId);
+  get(deviceId: string): Promise<ShadowEntry | undefined> {
+    return this.store.get(deviceId);
   }
 
-  // Merge with versioning, simple last-write-wins if version higher; allow small re-order window by idempotent apply
-  applyUpdate(deviceId: string, version: number, patch: Record<string, unknown>): ShadowEntry {
-    const current = this.shadows.get(deviceId) ?? { version: 0, reported: {}, updatedAt: 0 };
-    if (version <= current.version) return current;
-    const next: ShadowEntry = {
-      version,
-      reported: { ...current.reported, ...patch },
-      updatedAt: Date.now(),
-    };
-    this.shadows.set(deviceId, next);
+  async applyUpdate(deviceId: string, version: number, patch: Record<string, unknown>): Promise<ShadowEntry> {
+    const next = await this.store.applyUpdate(deviceId, version, patch);
     this.bus.emit({ type: 'conn.shadow.updated', deviceId, version: version, shadow: next });
     return next;
   }

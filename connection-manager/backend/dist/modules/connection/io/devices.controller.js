@@ -10,32 +10,29 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
 import { DeviceShadowService } from '../shadow/device-shadow.service.js';
+import { DEVICE_STORE } from '../db/store.tokens.js';
 let DevicesController = class DevicesController {
     shadow;
-    devices = new Map();
-    constructor(shadow) {
+    devices;
+    constructor(shadow, devices) {
         this.shadow = shadow;
+        this.devices = devices;
     }
     create(body) {
         const id = body.deviceId;
-        this.devices.set(id, { id, capabilities: body.capabilities ?? [], status: body.status ?? 'offline' });
-        return { id };
+        return this.devices.create(id, body.capabilities ?? [], body.status ?? 'offline');
     }
     list(capability, status) {
-        const items = Array.from(this.devices.values()).filter((d) => {
-            if (capability && !d.capabilities.includes(capability))
-                return false;
-            if (status && d.status !== status)
-                return false;
-            return true;
-        });
-        return { items };
+        return this.devices.list({ capability: capability ?? undefined, status: status ?? undefined }).then((items) => ({ items }));
     }
     shadowGet(id) {
-        const s = this.shadow.get(id);
-        return s ?? { version: 0, reported: {}, updatedAt: 0 };
+        return this.shadow.get(id).then((s) => s ?? { version: 0, reported: {}, updatedAt: 0 });
+    }
+    async shadowUpdate(id, body) {
+        const next = await this.shadow.applyUpdate(id, body.version, body.patch);
+        return next;
     }
 };
 __decorate([
@@ -60,9 +57,18 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", void 0)
 ], DevicesController.prototype, "shadowGet", null);
+__decorate([
+    Post('/:id/shadow'),
+    __param(0, Param('id')),
+    __param(1, Body()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], DevicesController.prototype, "shadowUpdate", null);
 DevicesController = __decorate([
     Controller('/v1/devices'),
-    __metadata("design:paramtypes", [DeviceShadowService])
+    __param(1, Inject(DEVICE_STORE)),
+    __metadata("design:paramtypes", [DeviceShadowService, Object])
 ], DevicesController);
 export { DevicesController };
 //# sourceMappingURL=devices.controller.js.map
