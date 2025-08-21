@@ -32,3 +32,19 @@ alembic upgrade head
 - tools: discovery, control (HTTP/MQTT), proxy controllers, zigbee/zwave probes
 - automation: simple rule engine
 - api: FastAPI surface
+- libs/capabilities: capability interfaces and adapter registry (Phase 1)
+
+## Capability adapters (Phase 1)
+
+- New typed capability interfaces live under `libs/capabilities/schemas.py`.
+- Provider adapters are registered at startup via `libs/capabilities/register_providers.py`.
+- Added capability endpoints (backward-compatible) under `/capability/{provider}/{external_id}/...` for:
+  - Switchable: `/switch/on`, `/switch/off`
+  - Dimmable: `/dimmer/set` with `{ level: 0-100 }`
+  - ColorControl: `/color/hsv` and `/color/temp`
+
+Initial providers wired:
+- `smartthings` via cloud API
+- `zigbee2mqtt` via MQTT publish (best-effort)
+
+Existing endpoints remain unchanged and compatible.

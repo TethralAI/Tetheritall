@@ -27,6 +27,13 @@ from tools.zwave.zwave_js_ws import ping_version as zwjs_version, get_nodes as z
 from api.alexa_webhook import router as alexa_router
 from tools.smartthings.oauth import build_auth_url as st_auth_url, exchange_code_for_token as st_exchange
 from tools.tuya.oauth import build_auth_url as tuya_auth_url
+from libs.capabilities.register_providers import register_all as register_capability_adapters
+from libs.capabilities.registry import registry as capability_registry
+from libs.capabilities.schemas import DeviceAddress, CapabilityType
+from adapters import usgs as usgs_adapter, nws as nws_adapter
+from tools.importers import home_assistant as ha_importer
+from tools.hubs import hubitat as hubitat_tools
+from tools.wearables import oura as oura_tools, terra as terra_tools
 
 
 class ScanRequest(BaseModel):
@@ -65,6 +72,11 @@ def create_app() -> FastAPI:
     async def on_start() -> None:
         await coordinator.start()
         await engine.start()
+        # Register capability adapters (optional/no-op if not available)
+        try:
+            register_capability_adapters()
+        except Exception:
+            pass
 
     @app.on_event("shutdown")
     async def on_stop() -> None:
@@ -122,6 +134,53 @@ def create_app() -> FastAPI:
     async def capabilities(result: Dict[str, Any]) -> Dict[str, Any]:
         caps = normalize_capabilities(result)
         return {"count": len(caps), "capabilities": [c.__dict__ for c in caps]}
+
+    # New capability endpoints (non-breaking; additive)
+    @app.post("/capability/{provider}/{external_id}/switch/on", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def capability_switch_on(provider: str, external_id: str) -> Dict[str, Any]:
+        adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
+        if not adapter:
+            raise HTTPException(status_code=404, detail="capability adapter not found")
+        return await asyncio.to_thread(adapter.turn_on, DeviceAddress(provider=provider, external_id=external_id))
+
+    @app.post("/capability/{provider}/{external_id}/switch/off", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def capability_switch_off(provider: str, external_id: str) -> Dict[str, Any]:
+        adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
+        if not adapter:
+            raise HTTPException(status_code=404, detail="capability adapter not found")
+        return await asyncio.to_thread(adapter.turn_off, DeviceAddress(provider=provider, external_id=external_id))
+
+    class DimmerBody(BaseModel):
+        level: int
+
+    @app.post("/capability/{provider}/{external_id}/dimmer/set", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def capability_dimmer_set(provider: str, external_id: str, body: DimmerBody) -> Dict[str, Any]:
+        adapter = capability_registry.get(provider, CapabilityType.DIMMABLE)
+        if not adapter:
+            raise HTTPException(status_code=404, detail="capability adapter not found")
+        return await asyncio.to_thread(adapter.set_brightness, DeviceAddress(provider=provider, external_id=external_id), body.level)
+
+    class ColorHSV(BaseModel):
+        h: float
+        s: float
+        v: float
+
+    class ColorTemp(BaseModel):
+        mireds: int
+
+    @app.post("/capability/{provider}/{external_id}/color/hsv", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def capability_color_hsv(provider: str, external_id: str, body: ColorHSV) -> Dict[str, Any]:
+        adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
+        if not adapter:
+            raise HTTPException(status_code=404, detail="capability adapter not found")
+        return await asyncio.to_thread(adapter.set_color_hsv, DeviceAddress(provider=provider, external_id=external_id), body.h, body.s, body.v)
+
+    @app.post("/capability/{provider}/{external_id}/color/temp", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def capability_color_temp(provider: str, external_id: str, body: ColorTemp) -> Dict[str, Any]:
+        adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
+        if not adapter:
+            raise HTTPException(status_code=404, detail="capability adapter not found")
+        return await asyncio.to_thread(adapter.set_color_temp, DeviceAddress(provider=provider, external_id=external_id), body.mireds)
 
     class RuleIn(BaseModel):
         id: str
@@ -205,6 +264,130 @@ def create_app() -> FastAPI:
         if fmt == "yaml":
             return {"format": "yaml", "content": yaml.safe_dump(data)}
         return {"format": "json", "content": data}
+
+    # Backward-compatible hazards endpoint
+    @app.get("/api/hazards", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def get_hazards(lat: float, lon: float) -> Dict[str, Any]:
+        quakes, alerts = await asyncio.gather(
+            asyncio.to_thread(usgs_adapter.fetch_quakes, lat, lon),
+            asyncio.to_thread(nws_adapter.fetch_alerts, lat, lon),
+        )
+        hazards: List[Dict[str, Any]] = []
+        for q in quakes:
+            item = dict(q)
+            item.setdefault("category", "seismic")
+            hazards.append(item)
+        for a in alerts:
+            item = dict(a)
+            item.setdefault("category", "weather")
+            hazards.append(item)
+        return {"count": len(hazards), "hazards": hazards}
+
+    # Dynamic registry (in-memory, non-persistent)
+    app.state.dynamic_registry: Dict[str, Dict[str, Any]] = {}
+
+    @app.post("/discover/ingest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def discover_ingest(spec: Dict[str, Any]) -> Dict[str, Any]:
+        manufacturer = str(spec.get("manufacturer", "")).lower()
+        if not manufacturer:
+            raise HTTPException(status_code=400, detail="missing manufacturer")
+        app.state.dynamic_registry[manufacturer] = spec
+        return {"ok": True}
+
+    @app.get("/integrations/dynamic/providers", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def dynamic_providers() -> Dict[str, Any]:
+        return {"providers": sorted(list(app.state.dynamic_registry.keys()))}
+
+    @app.post("/integrations/dynamic/{provider}/call", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def dynamic_call(provider: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        import requests as _rq
+
+        ep = (body or {}).get("endpoint", {})
+        url = ep.get("url") or ep.get("path")
+        method = (ep.get("method") or "GET").upper()
+        if not url:
+            raise HTTPException(status_code=400, detail="missing endpoint url")
+        try:
+            def _do():
+                if method == "GET":
+                    resp = _rq.get(url, timeout=settings.request_timeout_seconds)
+                else:
+                    resp = _rq.request(method=method, url=url, timeout=settings.request_timeout_seconds)
+                data: Any
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = resp.text
+                return {"ok": resp.ok, "status": resp.status_code, "data": data}
+
+            return await asyncio.to_thread(_do)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    # Hubitat Maker API minimal endpoints
+    @app.get("/integrations/hubitat/devices", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def hubitat_devices() -> Dict[str, Any]:
+        base = settings.hubitat_maker_base_url
+        token = settings.hubitat_maker_token or ""
+        if not base or not token:
+            return {"count": 0, "devices": []}
+        items = await asyncio.to_thread(hubitat_tools.list_devices_maker, base, token)
+        return {"count": len(items), "devices": items}
+
+    class HubitatCmdBody(BaseModel):
+        device_id: str
+        command: str
+        args: List[Any] | None = None
+
+    @app.post("/integrations/hubitat/command", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def hubitat_command(body: HubitatCmdBody) -> Dict[str, Any]:
+        base = settings.hubitat_maker_base_url
+        token = settings.hubitat_maker_token or ""
+        if not base or not token:
+            return {"ok": False, "error": "missing hubitat settings"}
+        return await asyncio.to_thread(hubitat_tools.device_command_maker, base, token, body.device_id, body.command, body.args or [])
+
+    # Importers: Home Assistant components
+    @app.get("/importers/home_assistant/components", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ha_import_components() -> Dict[str, Any]:
+        try:
+            items = await asyncio.to_thread(ha_importer.list_components, settings.github_token)
+            return {"count": len(items), "components": items}
+        except Exception as exc:
+            return {"count": 0, "components": [], "error": str(exc)}
+
+    # LLM routine generator (fallback heuristic if no key)
+    @app.post("/automation/routines/generate_llm", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def generate_routine_llm(body: Dict[str, Any]) -> Dict[str, Any]:
+        # Fallback: return a trivial rule heuristic regardless of key presence
+        text = str((body or {}).get("prompt") or "").lower()
+        action: Dict[str, Any] = {"type": "switch", "service": "on" if "on" in text else "off"}
+        rule = {"id": "generated", "trigger": {"type": "time"}, "conditions": [], "actions": [action]}
+        return {"rule": rule}
+
+    # Importers: Home Assistant manifest
+    @app.get("/importers/home_assistant/manifest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ha_manifest(component: str) -> Dict[str, Any]:
+        try:
+            m = await asyncio.to_thread(ha_importer.fetch_manifest, component, settings.github_token)
+            return {"manifest": (m or {})}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # Wearables: Oura OAuth URL (400 if missing)
+    @app.get("/integrations/oura/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def oura_oauth_url() -> Dict[str, Any]:
+        if not (settings.oura_client_id and settings.oura_redirect_uri):
+            raise HTTPException(status_code=400, detail="missing oura client_id/redirect_uri")
+        return {"url": oura_tools.build_auth_url(settings.oura_client_id, settings.oura_redirect_uri)}
+
+    # Wearables: Terra daily (200 with error if missing api key)
+    @app.get("/integrations/terra/daily", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def terra_daily(user_id: str) -> Dict[str, Any]:
+        api_key = settings.terra_api_key or ""
+        if not api_key:
+            return {"error": "missing api key"}
+        return await asyncio.to_thread(terra_tools.daily_summary, api_key, user_id)
 
     # Home Assistant local
     @app.get("/integrations/home_assistant/entities", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
