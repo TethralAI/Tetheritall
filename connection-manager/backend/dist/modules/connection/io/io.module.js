@@ -12,11 +12,12 @@ import { WsGateway } from './ws.gateway.js';
 import { CommissioningController } from './commissioning.controller.js';
 import { DevicesController } from './devices.controller.js';
 import { ShadowModule } from '../shadow/shadow.module.js';
+import { DbModule } from '../db/db.module.js';
 let IoModule = class IoModule {
 };
 IoModule = __decorate([
     Module({
-        imports: [PrivacyModule, ShadowModule],
+        imports: [PrivacyModule, ShadowModule, DbModule],
         controllers: [IngestController, CommissioningController, DevicesController],
         providers: [EventBus, WsGateway],
         exports: [EventBus],

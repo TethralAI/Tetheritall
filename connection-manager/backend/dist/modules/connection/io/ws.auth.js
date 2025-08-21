@@ -7,6 +7,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 import { Injectable } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
 let WsJwtGuard = class WsJwtGuard {
+    tokensPerIp = new Map();
+    limit = Number(process.env.WS_RATE_LIMIT || 20);
+    windowMs = Number(process.env.WS_RATE_WINDOW_MS || 10000);
     canActivate(context) {
         const client = context.switchToWs().getClient();
         const token = client.handshake?.auth?.token || client.handshake?.headers?.authorization?.replace('Bearer ', '');
@@ -15,7 +18,22 @@ let WsJwtGuard = class WsJwtGuard {
             if (!token)
                 return false;
             const decoded = jwt.verify(token, secret);
-            client.user = decoded;
+            const user = decoded;
+            client.user = user;
+            const ip = client.handshake?.address || 'unknown';
+            const now = Date.now();
+            const entry = this.tokensPerIp.get(ip) ?? { count: 0, windowStart: now };
+            if (now - entry.windowStart > this.windowMs) {
+                entry.count = 0;
+                entry.windowStart = now;
+            }
+            entry.count++;
+            this.tokensPerIp.set(ip, entry);
+            if (entry.count > this.limit)
+                return false;
+            const scopes = Array.isArray(user?.scp) ? user.scp : typeof user?.scp === 'string' ? user.scp.split(' ') : [];
+            if (!scopes.includes('conn.read'))
+                return false;
             return true;
         }
         catch {
