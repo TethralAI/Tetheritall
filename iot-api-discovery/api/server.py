@@ -35,6 +35,9 @@ from tools.importers import home_assistant as ha_importer
 from tools.hubs import hubitat as hubitat_tools
 from tools.wearables import oura as oura_tools, terra as terra_tools
 import httpx
+from api.smartthings_webhook import router as st_events_router
+from api.smartthings_subscriptions import router as st_sub_router
+from storage.twins import store as twin_store
 
 
 class ScanRequest(BaseModel):
@@ -85,6 +88,8 @@ def create_app() -> FastAPI:
         await engine.stop()
 
     app.include_router(alexa_router)
+    app.include_router(st_events_router)
+    app.include_router(st_sub_router)
 
     @app.post("/scan/device", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:
@@ -285,6 +290,58 @@ def create_app() -> FastAPI:
         if fmt == "yaml":
             return {"format": "yaml", "content": yaml.safe_dump(data)}
         return {"format": "json", "content": data}
+
+    # UI schema and mapping suggestion endpoints (in-memory/Redis only)
+    @app.get("/ui/device/{provider}/{external_id}", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ui_schema(provider: str, external_id: str) -> Dict[str, Any]:
+        twin = twin_store.get(provider, external_id)
+        if not twin:
+            raise HTTPException(status_code=404, detail="device not found")
+        # Grouped by capability with simple control templates
+        caps = set(twin.get("capabilities", []) or [])
+        groups: Dict[str, Any] = {}
+        if any(c in caps for c in ("switch", "light")):
+            groups["switchable"] = {"controls": [{"type": "toggle", "action": {"capability": "switch"}}]}
+        if any(c in caps for c in ("switchLevel", "dimmer")):
+            groups["dimmable"] = {"controls": [{"type": "slider", "min": 0, "max": 100, "action": {"capability": "dimmer"}}]}
+        if any(c in caps for c in ("colorControl", "colorTemperature")):
+            groups["color"] = {"controls": [
+                {"type": "color", "action": {"capability": "colorControl"}},
+                {"type": "slider", "min": 153, "max": 500, "action": {"capability": "colorTemperature"}},
+            ]}
+        return {"provider": provider, "external_id": external_id, "name": twin.get("name"), "groups": groups}
+
+    # Mapping suggestions store (signal-based, no persistence beyond Redis/memory)
+    @app.post("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def add_mapping_suggestions(body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                rds.set(key, _j.dumps(body))
+            else:
+                app.state.mapping_suggestions = body
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @app.get("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def get_mapping_suggestions() -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                v = rds.get(key)
+                data = _j.loads(v) if v else {}
+            else:
+                data = getattr(app.state, "mapping_suggestions", {})
+            return {"suggestions": data}
+        except Exception as exc:
+            return {"suggestions": {}, "error": str(exc)}
 
     # Backward-compatible hazards endpoint
     @app.get("/api/hazards", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
