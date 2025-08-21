@@ -1,0 +1,9 @@
+image: ghcr.io/tethralai/tetheritall-api:latest
+replicaCount: 1
+env:
+  REDIS_URL: redis://redis:6379/0
+service:
+  port: 8000
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"

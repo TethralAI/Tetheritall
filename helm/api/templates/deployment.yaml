@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "api.fullname" . }}
+  labels:
+    app: api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+      annotations:
+{{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      containers:
+        - name: api
+          image: {{ .Values.image }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
