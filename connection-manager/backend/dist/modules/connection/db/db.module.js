@@ -7,14 +7,43 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 import { Module } from '@nestjs/common';
 import { DEVICE_STORE, SHADOW_STORE } from './store.tokens.js';
 import { InMemoryDeviceStore, InMemoryShadowStore } from './memory.stores.js';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { DeviceEntity } from './entities/device.entity.js';
+import { DeviceShadowEntity } from './entities/device_shadow.entity.js';
+import { OrmDeviceStore, OrmShadowStore } from './typeorm.stores.js';
+const ormProviders = [
+    {
+        provide: DEVICE_STORE,
+        inject: [getRepositoryToken(DeviceEntity)],
+        useFactory: (repo) => new OrmDeviceStore(repo),
+    },
+    {
+        provide: SHADOW_STORE,
+        inject: [getRepositoryToken(DeviceShadowEntity)],
+        useFactory: (repo) => new OrmShadowStore(repo),
+    },
+];
 let DbModule = class DbModule {
 };
 DbModule = __decorate([
     Module({
-        providers: [
-            { provide: DEVICE_STORE, useClass: InMemoryDeviceStore },
-            { provide: SHADOW_STORE, useClass: InMemoryShadowStore },
-        ],
+        imports: process.env.DB_URL
+            ? [
+                TypeOrmModule.forRoot({
+                    type: 'postgres',
+                    url: process.env.DB_URL,
+                    entities: [DeviceEntity, DeviceShadowEntity],
+                    synchronize: true,
+                }),
+                TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity]),
+            ]
+            : [],
+        providers: process.env.DB_URL
+            ? ormProviders
+            : [
+                { provide: DEVICE_STORE, useClass: InMemoryDeviceStore },
+                { provide: SHADOW_STORE, useClass: InMemoryShadowStore },
+            ],
         exports: [DEVICE_STORE, SHADOW_STORE],
     })
 ], DbModule);

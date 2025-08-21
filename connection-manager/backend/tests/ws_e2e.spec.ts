@@ -23,7 +23,7 @@ describe('WS E2E - shadow update broadcast', () => {
   });
 
   it('broadcasts conn.shadow.updated to device room', async () => {
-    const token = jwt.sign({ sub: 'user-1' }, process.env.JWT_SECRET || 'dev-secret');
+    const token = jwt.sign({ sub: 'user-1', scp: 'conn.read' }, process.env.JWT_SECRET || 'dev-secret');
     const client: Socket = io(`${serverUrl}/v1/stream`, { auth: { token }, transports: ['websocket'] });
     await new Promise<void>((resolve) => client.on('connect', () => resolve()));
     client.emit('subscribe', { deviceId: 'dev-123' });
