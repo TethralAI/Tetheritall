@@ -301,14 +301,152 @@ def create_app() -> FastAPI:
         caps = set(twin.get("capabilities", []) or [])
         groups: Dict[str, Any] = {}
         if any(c in caps for c in ("switch", "light")):
-            groups["switchable"] = {"controls": [{"type": "toggle", "action": {"capability": "switch"}}]}
+            groups["switchable"] = {
+                "controls": [
+                    {
+                        "type": "toggle",
+                        "action": {"capability": "switch"},
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/on"},
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/off"}
+                        ]
+                    }
+                ]
+            }
         if any(c in caps for c in ("switchLevel", "dimmer")):
-            groups["dimmable"] = {"controls": [{"type": "slider", "min": 0, "max": 100, "action": {"capability": "dimmer"}}]}
+            groups["dimmable"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "min": 0,
+                        "max": 100,
+                        "action": {"capability": "dimmer"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/dimmer/set",
+                                "body": {"level": "<0-100>"}
+                            }
+                        ]
+                    }
+                ]
+            }
         if any(c in caps for c in ("colorControl", "colorTemperature")):
-            groups["color"] = {"controls": [
-                {"type": "color", "action": {"capability": "colorControl"}},
-                {"type": "slider", "min": 153, "max": 500, "action": {"capability": "colorTemperature"}},
-            ]}
+            groups["color"] = {
+                "controls": [
+                    {
+                        "type": "color",
+                        "action": {"capability": "colorControl"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/hsv",
+                                "body": {"h": "<0-360>", "s": "<0-100>", "v": "<0-100>"}
+                            }
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "min": 153,
+                        "max": 500,
+                        "action": {"capability": "colorTemperature"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/temp",
+                                "body": {"mireds": "<153-500>"}
+                            }
+                        ]
+                    }
+                ]
+            }
+        # Thermostat (best-effort templates)
+        if any(c in caps for c in ("thermostat", "temperature", "thermostatMode", "coolingSetpoint", "heatingSetpoint")):
+            groups["thermostat"] = {
+                "controls": [
+                    {
+                        "type": "select",
+                        "id": "hvac_mode",
+                        "label": "Mode",
+                        "options": ["off", "heat", "cool", "auto"],
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/mode", "body": {"mode": "<off|heat|cool|auto>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "cool_setpoint",
+                        "label": "Cool to",
+                        "min": 16,
+                        "max": 30,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/cooling_setpoint", "body": {"celsius": "<16-30>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "heat_setpoint",
+                        "label": "Heat to",
+                        "min": 10,
+                        "max": 25,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/heating_setpoint", "body": {"celsius": "<10-25>"}}
+                        ]
+                    }
+                ]
+            }
+        # Cover
+        if any(c in caps for c in ("cover", "windowShade", "position")):
+            groups["cover"] = {
+                "controls": [
+                    {"type": "button", "id": "open", "label": "Open", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/open"}]},
+                    {"type": "button", "id": "close", "label": "Close", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/close"}]},
+                    {
+                        "type": "slider",
+                        "id": "position",
+                        "label": "Position",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/position", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Fan
+        if any(c in caps for c in ("fan", "fanSpeed", "fanControl")):
+            groups["fan"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "id": "speed",
+                        "label": "Speed",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/fan/speed", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Media
+        if any(c in caps for c in ("media", "mediaPlayback", "audioVolume")):
+            groups["media"] = {
+                "controls": [
+                    {"type": "button", "id": "play", "label": "Play", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/play"}]},
+                    {"type": "button", "id": "pause", "label": "Pause", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/pause"}]},
+                    {
+                        "type": "slider",
+                        "id": "volume",
+                        "label": "Volume",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/media/volume", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
         return {"provider": provider, "external_id": external_id, "name": twin.get("name"), "groups": groups}
 
     # Mapping suggestions store (signal-based, no persistence beyond Redis/memory)
