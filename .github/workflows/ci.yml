@@ -19,6 +19,10 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest -q iot-api-discovery/tests
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check iot-api-discovery
   docker:
     needs: test
     runs-on: ubuntu-latest
@@ -38,6 +42,11 @@ jobs:
           docker build -t ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }} iot-api-discovery
           docker build -t ghcr.io/${{ github.repository }}/tetheritall-integrations:sha-${{ github.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
           docker build -t ghcr.io/${{ github.repository }}/tetheritall-gateway:sha-${{ github.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+      - name: Generate SBOM (optional)
+        if: ${{ always() }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }}
       - name: Push images
         run: |
           docker push ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }}
