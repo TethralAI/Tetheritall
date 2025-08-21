@@ -13,6 +13,8 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { EventBus } from '../observe/event-bus.js';
+import { UseGuards } from '@nestjs/common';
+import { WsJwtGuard } from './ws.auth.js';
 let WsGateway = class WsGateway {
     bus;
     server;
@@ -64,10 +66,11 @@ __decorate([
     __param(1, ConnectedSocket()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Socket]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:returntype", Object)
 ], WsGateway.prototype, "subscribe", null);
 WsGateway = __decorate([
     WebSocketGateway({ namespace: '/v1/stream', cors: { origin: true } }),
+    UseGuards(WsJwtGuard),
     __metadata("design:paramtypes", [EventBus])
 ], WsGateway);
 export { WsGateway };

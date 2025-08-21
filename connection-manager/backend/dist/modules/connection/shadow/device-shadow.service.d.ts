@@ -1,4 +1,5 @@
 import { EventBus } from '../observe/event-bus.js';
+import type { ShadowStore } from '../db/shadow.store.js';
 export interface ShadowEntry {
     version: number;
     reported: Record<string, unknown>;
@@ -6,8 +7,8 @@ export interface ShadowEntry {
 }
 export declare class DeviceShadowService {
     private readonly bus;
-    private shadows;
-    constructor(bus: EventBus);
-    get(deviceId: string): ShadowEntry | undefined;
-    applyUpdate(deviceId: string, version: number, patch: Record<string, unknown>): ShadowEntry;
+    private readonly store;
+    constructor(bus: EventBus, store: ShadowStore);
+    get(deviceId: string): Promise<ShadowEntry | undefined>;
+    applyUpdate(deviceId: string, version: number, patch: Record<string, unknown>): Promise<ShadowEntry>;
 }

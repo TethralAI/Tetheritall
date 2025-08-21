@@ -1,11 +1,14 @@
 import { OnModuleInit } from '@nestjs/common';
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket, WsResponse } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { EventBus, InternalEvent } from '../observe/event-bus.js';
+import { UseGuards } from '@nestjs/common';
+import { WsJwtGuard } from './ws.auth.js';
 
 type StreamSubscribe = { deviceId?: string; capability?: string; room?: string };
 
 @WebSocketGateway({ namespace: '/v1/stream', cors: { origin: true } })
+@UseGuards(WsJwtGuard)
 export class WsGateway implements OnModuleInit {
   @WebSocketServer()
   server!: Server;
@@ -36,7 +39,7 @@ export class WsGateway implements OnModuleInit {
   }
 
   @SubscribeMessage('subscribe')
-  subscribe(@MessageBody() body: StreamSubscribe, @ConnectedSocket() client: Socket) {
+  subscribe(@MessageBody() body: StreamSubscribe, @ConnectedSocket() client: Socket): WsResponse<{ ok: true }> | { ok: true } {
     if (body.deviceId) client.join(`device:${body.deviceId}`);
     if (body.capability) client.join(`cap:${body.capability}`);
     if (body.room) client.join(`room:${body.room}`);
