@@ -34,6 +34,7 @@ from adapters import usgs as usgs_adapter, nws as nws_adapter
 from tools.importers import home_assistant as ha_importer
 from tools.hubs import hubitat as hubitat_tools
 from tools.wearables import oura as oura_tools, terra as terra_tools
+import httpx
 
 
 class ScanRequest(BaseModel):
@@ -138,6 +139,10 @@ def create_app() -> FastAPI:
     # New capability endpoints (non-breaking; additive)
     @app.post("/capability/{provider}/{external_id}/switch/on", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_switch_on(provider: str, external_id: str) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/switch/on")
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -145,6 +150,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/switch/off", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_switch_off(provider: str, external_id: str) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/switch/off")
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -155,6 +164,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/dimmer/set", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_dimmer_set(provider: str, external_id: str, body: DimmerBody) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/dimmer/set", json={"level": body.level})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.DIMMABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -170,6 +183,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/color/hsv", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_color_hsv(provider: str, external_id: str, body: ColorHSV) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/color/hsv", json={"h": body.h, "s": body.s, "v": body.v})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -177,6 +194,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/color/temp", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_color_temp(provider: str, external_id: str, body: ColorTemp) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/color/temp", json={"mireds": body.mireds})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")

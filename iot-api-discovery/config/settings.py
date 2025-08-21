@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     # Outbound security
     outbound_allowlist: str | None = None  # comma-separated hostnames or domains
+    # Integrations service (Phase 2)
+    integrations_base_url: str | None = None  # e.g., http://integrations:8100
+    proxy_capabilities_via_integrations: bool = False
     # Wearables / health
     oura_client_id: str | None = None
     oura_client_secret: str | None = None
