@@ -38,7 +38,8 @@ DbModule = __decorate([
                     type: 'postgres',
                     url: process.env.DB_URL,
                     entities: [DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity],
-                    synchronize: true,
+                    synchronize: false,
+                    migrations: [process.env.NODE_ENV === 'test' ? 'src/migrations/*.ts' : 'dist/migrations/*.js'],
                 }),
                 TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity]),
             ]

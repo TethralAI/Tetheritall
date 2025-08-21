@@ -8,7 +8,9 @@ import { PrivacyDecisionLogEntity } from './src/modules/connection/db/entities/p
 import { DeviceCredentialsEntity } from './src/modules/connection/db/entities/device_credentials.entity.js';
 import { SecurityQuarantineEntity } from './src/modules/connection/db/entities/security_quarantine.entity.js';
 
-export const AppDataSource = new DataSource({
+const migrationsPath = process.env.NODE_ENV === 'test' ? 'src/migrations/*.ts' : 'dist/migrations/*.js';
+
+export default new DataSource({
   type: 'postgres',
   url: process.env.DB_URL,
   entities: [
@@ -21,9 +23,7 @@ export const AppDataSource = new DataSource({
     DeviceCredentialsEntity,
     SecurityQuarantineEntity,
   ],
-  migrations: ['dist/migrations/*.js'],
+  migrations: [migrationsPath],
   synchronize: false,
 });
-
-export default AppDataSource;
 
