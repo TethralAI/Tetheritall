@@ -37,18 +37,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: meta
+        run: |
+          echo "sha=sha-${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
       - name: Build images
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }} iot-api-discovery
-          docker build -t ghcr.io/${{ github.repository }}/tetheritall-integrations:sha-${{ github.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
-          docker build -t ghcr.io/${{ github.repository }}/tetheritall-gateway:sha-${{ github.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }} iot-api-discovery
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.tag }}
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.tag }}
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.tag }}
       - name: Generate SBOM (optional)
         if: ${{ always() }}
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }}
+          image: ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}
       - name: Push images
         run: |
-          docker push ghcr.io/${{ github.repository }}/tetheritall-api:sha-${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/tetheritall-integrations:sha-${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/tetheritall-gateway:sha-${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.tag }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.tag }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.tag }}
+      - name: Cosign sign (optional)
+        if: ${{ secrets.COSIGN_KEY != '' }}
+        uses: sigstore/cosign-installer@v3.5.0
+      - name: Cosign sign images
+        if: ${{ secrets.COSIGN_KEY != '' }}
+        run: |
+          echo "${{ secrets.COSIGN_KEY }}" > cosign.key
+          COSIGN_PASSWORD=${{ secrets.COSIGN_PASSWORD }} cosign sign --key cosign.key ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}

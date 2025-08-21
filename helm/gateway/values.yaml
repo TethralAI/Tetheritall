@@ -1,0 +1,11 @@
+image: ghcr.io/tethralai/tetheritall-gateway:latest
+replicaCount: 1
+env:
+  API_TOKEN: "change-me"
+  REDIS_URL: redis://redis:6379/0
+  INTEGRATIONS_BASE_URL: http://integrations:8100
+service:
+  port: 8001
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8001"
