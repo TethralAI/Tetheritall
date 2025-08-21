@@ -39,6 +39,8 @@ from api.smartthings_webhook import router as st_events_router
 from api.smartthings_subscriptions import router as st_sub_router
 from storage.twins import store as twin_store
 from tools.llm.guard import LLMGuard
+from tools.energy.ocpi_client import OCPIClient
+from api.middleware import request_id_and_logging_middleware
 
 
 class ScanRequest(BaseModel):
@@ -51,6 +53,7 @@ class ScanRequest(BaseModel):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
+    app.middleware("http")(request_id_and_logging_middleware)
     coordinator = CoordinatorAgent(CoordinatorConfig())
     engine = AutomationEngine()
     llm_guard = LLMGuard()
@@ -715,6 +718,34 @@ def create_app() -> FastAPI:
         if not settings.zwave_js_url:
             return {"ok": False, "error": "missing zwave_js_url"}
         return await zwjs_set_value(settings.zwave_js_url, body.node_id, body.value_id, body.value)
+
+    # OCPI endpoints (feature flagged)
+    @app.get("/energy/ocpi/locations", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ocpi_locations() -> Dict[str, Any]:
+        if not settings.enable_ocpi:
+            return {"enabled": False, "items": []}
+        if not (settings.ocpi_base_url and settings.ocpi_token):
+            return {"enabled": True, "items": []}
+        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).locations)
+        return {"enabled": True, "count": len(items), "items": items}
+
+    @app.get("/energy/ocpi/tariffs", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ocpi_tariffs() -> Dict[str, Any]:
+        if not settings.enable_ocpi:
+            return {"enabled": False, "items": []}
+        if not (settings.ocpi_base_url and settings.ocpi_token):
+            return {"enabled": True, "items": []}
+        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).tariffs)
+        return {"enabled": True, "count": len(items), "items": items}
+
+    @app.get("/energy/ocpi/sessions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ocpi_sessions() -> Dict[str, Any]:
+        if not settings.enable_ocpi:
+            return {"enabled": False, "items": []}
+        if not (settings.ocpi_base_url and settings.ocpi_token):
+            return {"enabled": True, "items": []}
+        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).sessions)
+        return {"enabled": True, "count": len(items), "items": items}
 
 
     return app

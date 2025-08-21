@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     edge_lan_only: bool = True
     telemetry_opt_in: bool = False
     telemetry_namespace: str | None = None
+    # Energy/EV protocols (OCPI) - feature flagged
+    enable_ocpi: bool = False
+    ocpi_base_url: str | None = None
+    ocpi_token: str | None = None
     # Integrations service (Phase 2)
     integrations_base_url: str | None = None  # e.g., http://integrations:8100
     proxy_capabilities_via_integrations: bool = False

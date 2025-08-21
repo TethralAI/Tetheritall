@@ -1,0 +1,20 @@
+{
+  "annotations": {"list": []},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "API Requests/min",
+      "targets": [{"expr": "sum(rate(http_requests_total[1m]))"}]
+    },
+    {
+      "type": "graph",
+      "title": "HTTP Status Codes",
+      "targets": [
+        {"expr": "sum by(status)(rate(http_requests_total[5m]))"}
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "Tetheritall Overview",
+  "time": {"from": "now-6h", "to": "now"}
+}
