@@ -38,6 +38,7 @@ import httpx
 from api.smartthings_webhook import router as st_events_router
 from api.smartthings_subscriptions import router as st_sub_router
 from storage.twins import store as twin_store
+from tools.llm.guard import LLMGuard
 
 
 class ScanRequest(BaseModel):
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
     coordinator = CoordinatorAgent(CoordinatorConfig())
     engine = AutomationEngine()
+    llm_guard = LLMGuard()
 
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -574,12 +576,20 @@ def create_app() -> FastAPI:
 
     # LLM routine generator (fallback heuristic if no key)
     @app.post("/automation/routines/generate_llm", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def generate_routine_llm(body: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_routine_llm(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
         # Fallback: return a trivial rule heuristic regardless of key presence
-        text = str((body or {}).get("prompt") or "").lower()
+        org_id = request.headers.get(settings.org_id_header, "default")
+        prompt_raw = str((body or {}).get("prompt") or "")
+        prompt = llm_guard.pii_scrub(prompt_raw)
+        # Budget check (assume cost proportional to length)
+        cost = max(1, len(prompt) // 50)
+        if not llm_guard.check_and_consume(org_id, cost):
+            raise HTTPException(status_code=402, detail="LLM budget exceeded")
+        text = prompt.lower()
         action: Dict[str, Any] = {"type": "switch", "service": "on" if "on" in text else "off"}
         rule = {"id": "generated", "trigger": {"type": "time"}, "conditions": [], "actions": [action]}
-        return {"rule": rule}
+        llm_guard.log_audit(org_id, {"ts": int(time.time()), "prompt_len": len(prompt_raw), "cost": cost, "rule": rule})
+        return {"rule": rule, "deterministic": settings.llm_deterministic}
 
     # Importers: Home Assistant manifest
     @app.get("/importers/home_assistant/manifest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
