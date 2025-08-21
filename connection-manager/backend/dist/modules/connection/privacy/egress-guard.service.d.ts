@@ -3,6 +3,7 @@ import { PrivacyClassifier, ClassifiedEvent } from './privacy-classifier.service
 import { MinimizationService } from './minimization/minimization.service.js';
 import { EventBus } from '../observe/event-bus.js';
 import { LocalOnlyModeService } from './local-only.service.js';
+import { OptionalRepos } from '../db/repositories.js';
 export interface IngestEvent<T = unknown> {
     deviceId: string;
     capability: string;
@@ -21,6 +22,7 @@ export declare class EgressGuard {
     private readonly minimizer;
     private readonly bus;
     private readonly localOnly;
-    constructor(cache: ConsentCache, classifier: PrivacyClassifier, minimizer: MinimizationService, bus: EventBus, localOnly: LocalOnlyModeService);
+    private readonly repos;
+    constructor(cache: ConsentCache, classifier: PrivacyClassifier, minimizer: MinimizationService, bus: EventBus, localOnly: LocalOnlyModeService, repos: OptionalRepos);
     evaluate(event: IngestEvent): Promise<GuardResult>;
 }
