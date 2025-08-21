@@ -59,7 +59,7 @@ DbModule = __decorate([
                 { provide: 'PRIVACY_REPO', useValue: undefined },
                 OptionalRepos,
             ],
-        exports: [DEVICE_STORE, SHADOW_STORE],
+        exports: [DEVICE_STORE, SHADOW_STORE, OptionalRepos],
     })
 ], DbModule);
 export { DbModule };
