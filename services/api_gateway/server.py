@@ -23,9 +23,18 @@ def create_app() -> FastAPI:
     OUTBOUND_ALLOWLIST = parse_allowlist(os.getenv("OUTBOUND_ALLOWLIST"))
     INTEGRATIONS_BASE_URL = os.getenv("INTEGRATIONS_BASE_URL") or os.getenv("INTEGRATIONS_BASE_URL".lower())
     AUTOMATION_BASE_URL = os.getenv("AUTOMATION_BASE_URL")
+    ORG_ID_HEADER = os.getenv("ORG_ID_HEADER", "X-Org-Id")
+    # Token bucket-ish limits (per second) and burst window in seconds
+    RL_RPS = int(os.getenv("RL_RPS", "10"))
+    RL_BURST = int(os.getenv("RL_BURST", "30"))
+    BODY_MAX_BYTES = int(os.getenv("BODY_MAX_BYTES", "65536"))
+    STRICT_JSON = os.getenv("STRICT_JSON", "true").lower() == "true"
+    CB_FAILS = int(os.getenv("CB_FAILS", "5"))
+    CB_COOLDOWN = int(os.getenv("CB_COOLDOWN", "30"))
 
     # Simple in-memory RL fallback
     app.state.rate_store = {}
+    app.state.cb = {"integrations": {"open_until": 0, "fails": 0}, "automation": {"open_until": 0, "fails": 0}}
 
     try:
         import redis  # type: ignore
@@ -43,6 +52,9 @@ def create_app() -> FastAPI:
         except Exception:
             return False
 
+    def _bucket_key(ip: str, org: str, path: str) -> str:
+        return f"rl2:{org}:{ip}:{path}:{int(time.time())}"
+
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
         # API Key allow-list (simple)
@@ -52,13 +64,14 @@ def create_app() -> FastAPI:
 
         # Rate limit per-IP using Redis if available else in-memory
         client_ip = request.client.host if request.client else "unknown"
-        key = f"rl:{client_ip}:{int(time.time())//60}"
-        limit = 120
+        org_id = request.headers.get(ORG_ID_HEADER, "default")
+        key = _bucket_key(client_ip, org_id, request.url.path)
+        limit = RL_RPS
         try:
             if app.state.redis:
                 val = app.state.redis.incr(key)
                 if val == 1:
-                    app.state.redis.expire(key, 60)
+                    app.state.redis.expire(key, 1)
                 if val > limit:
                     return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
             else:
@@ -77,6 +90,45 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     # Proxy endpoints
+    async def _validate_json_body(request: Request) -> bytes | None:
+        # Enforce size and JSON object type for mutating requests
+        if request.method in ("POST", "PUT", "PATCH"):
+            cl = request.headers.get("content-length")
+            if cl and int(cl) > BODY_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="payload too large")
+            body = await request.body()
+            if len(body) > BODY_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="payload too large")
+            if STRICT_JSON and request.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    import json as _j
+                    data = _j.loads(body or b"{}")
+                    if not isinstance(data, dict):
+                        raise HTTPException(status_code=422, detail="json body must be an object")
+                except HTTPException:
+                    raise
+                except Exception:
+                    raise HTTPException(status_code=400, detail="invalid json")
+            return body
+        return await request.body()
+
+    def _check_cb(target: str) -> None:
+        now = int(time.time())
+        st = app.state.cb.get(target, {"open_until": 0, "fails": 0})
+        if st["open_until"] > now:
+            raise HTTPException(status_code=503, detail=f"{target} unavailable")
+
+    def _record_cb(target: str, success: bool) -> None:
+        now = int(time.time())
+        st = app.state.cb.get(target, {"open_until": 0, "fails": 0})
+        if success:
+            st["fails"] = 0
+            st["open_until"] = 0
+        else:
+            st["fails"] = st.get("fails", 0) + 1
+            if st["fails"] >= CB_FAILS:
+                st["open_until"] = now + CB_COOLDOWN
+        app.state.cb[target] = st
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -84,10 +136,16 @@ def create_app() -> FastAPI:
         target = f"{INTEGRATIONS_BASE_URL}/{path}"
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
+        _check_cb("integrations")
         async with httpx.AsyncClient(timeout=20) as client:
-            body = await request.body()
+            body = await _validate_json_body(request)
             headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-            resp = await client.request(request.method, target, content=body, headers=headers)
+            try:
+                resp = await client.request(request.method, target, content=body, headers=headers)
+                _record_cb("integrations", resp.status_code < 500)
+            except Exception:
+                _record_cb("integrations", False)
+                raise HTTPException(status_code=502, detail="upstream error")
             try:
                 data = resp.json()
             except Exception:
@@ -101,10 +159,16 @@ def create_app() -> FastAPI:
         target = f"{AUTOMATION_BASE_URL}/{path}"
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
+        _check_cb("automation")
         async with httpx.AsyncClient(timeout=20) as client:
-            body = await request.body()
+            body = await _validate_json_body(request)
             headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-            resp = await client.request(request.method, target, content=body, headers=headers)
+            try:
+                resp = await client.request(request.method, target, content=body, headers=headers)
+                _record_cb("automation", resp.status_code < 500)
+            except Exception:
+                _record_cb("automation", False)
+                raise HTTPException(status_code=502, detail="upstream error")
             try:
                 data = resp.json()
             except Exception:
