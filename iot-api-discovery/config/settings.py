@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str | None = None  # default https://api.openai.com/v1
     openai_model: str = "gpt-4o-mini"
+    # LLM guardrails and budgets (lite)
+    org_id_header: str = "X-Org-Id"
+    llm_budgets: str | None = None  # e.g., "default:1000,orgA:500"
+    llm_deterministic: bool = True
+    llm_allowed_tools: str | None = None  # comma-separated
     # Hubitat Maker API (optional)
     hubitat_maker_base_url: str | None = None  # e.g., http://hubitat.local/apps/api/<appId>
     hubitat_maker_token: str | None = None
@@ -84,6 +89,10 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     # Outbound security
     outbound_allowlist: str | None = None  # comma-separated hostnames or domains
+    # Edge agent and telemetry
+    edge_lan_only: bool = True
+    telemetry_opt_in: bool = False
+    telemetry_namespace: str | None = None
     # Integrations service (Phase 2)
     integrations_base_url: str | None = None  # e.g., http://integrations:8100
     proxy_capabilities_via_integrations: bool = False
