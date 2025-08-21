@@ -10,7 +10,12 @@ import { InMemoryDeviceStore, InMemoryShadowStore } from './memory.stores.js';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { DeviceEntity } from './entities/device.entity.js';
 import { DeviceShadowEntity } from './entities/device_shadow.entity.js';
+import { CommandLogEntity } from './entities/command_log.entity.js';
+import { EventEntity } from './entities/event.entity.js';
+import { SecurityEventEntity } from './entities/security_event.entity.js';
+import { PrivacyDecisionLogEntity } from './entities/privacy_decision_log.entity.js';
 import { OrmDeviceStore, OrmShadowStore } from './typeorm.stores.js';
+import { OptionalRepos } from './repositories.js';
 const ormProviders = [
     {
         provide: DEVICE_STORE,
@@ -32,17 +37,27 @@ DbModule = __decorate([
                 TypeOrmModule.forRoot({
                     type: 'postgres',
                     url: process.env.DB_URL,
-                    entities: [DeviceEntity, DeviceShadowEntity],
+                    entities: [DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity],
                     synchronize: true,
                 }),
-                TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity]),
+                TypeOrmModule.forFeature([DeviceEntity, DeviceShadowEntity, CommandLogEntity, EventEntity, SecurityEventEntity, PrivacyDecisionLogEntity]),
             ]
             : [],
         providers: process.env.DB_URL
-            ? ormProviders
+            ? [
+                ...ormProviders,
+                { provide: 'EVENT_REPO', useExisting: getRepositoryToken(EventEntity) },
+                { provide: 'COMMAND_REPO', useExisting: getRepositoryToken(CommandLogEntity) },
+                { provide: 'PRIVACY_REPO', useExisting: getRepositoryToken(PrivacyDecisionLogEntity) },
+                OptionalRepos,
+            ]
             : [
                 { provide: DEVICE_STORE, useClass: InMemoryDeviceStore },
                 { provide: SHADOW_STORE, useClass: InMemoryShadowStore },
+                { provide: 'EVENT_REPO', useValue: undefined },
+                { provide: 'COMMAND_REPO', useValue: undefined },
+                { provide: 'PRIVACY_REPO', useValue: undefined },
+                OptionalRepos,
             ],
         exports: [DEVICE_STORE, SHADOW_STORE],
     })

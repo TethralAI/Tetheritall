@@ -9,6 +9,8 @@ import { EventEntity } from './entities/event.entity.js';
 import { SecurityEventEntity } from './entities/security_event.entity.js';
 import { PrivacyDecisionLogEntity } from './entities/privacy_decision_log.entity.js';
 import { OrmDeviceStore, OrmShadowStore } from './typeorm.stores.js';
+// getRepositoryToken already imported
+import { OptionalRepos } from './repositories.js';
 
 const ormProviders: Provider[] = [
   {
@@ -36,12 +38,22 @@ const ormProviders: Provider[] = [
       ]
     : [],
   providers: process.env.DB_URL
-    ? ormProviders
+    ? [
+        ...ormProviders,
+        { provide: 'EVENT_REPO', useExisting: getRepositoryToken(EventEntity) },
+        { provide: 'COMMAND_REPO', useExisting: getRepositoryToken(CommandLogEntity) },
+        { provide: 'PRIVACY_REPO', useExisting: getRepositoryToken(PrivacyDecisionLogEntity) },
+        OptionalRepos,
+      ]
     : [
         { provide: DEVICE_STORE, useClass: InMemoryDeviceStore },
         { provide: SHADOW_STORE, useClass: InMemoryShadowStore },
+        { provide: 'EVENT_REPO', useValue: undefined },
+        { provide: 'COMMAND_REPO', useValue: undefined },
+        { provide: 'PRIVACY_REPO', useValue: undefined },
+        OptionalRepos,
       ],
-  exports: [DEVICE_STORE, SHADOW_STORE],
+  exports: [DEVICE_STORE, SHADOW_STORE, OptionalRepos],
 })
 export class DbModule {}
 
