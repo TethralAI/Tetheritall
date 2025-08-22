@@ -19,6 +19,11 @@ uvicorn services.integrations.server:app --reload --port 8100
 uvicorn services.api_gateway.server:app --reload --port 8001
 ```
 
+Production notes:
+- Redis HA: use Sentinel or Redis Cluster; set `REDIS_URL` to sentinel service or cluster endpoints. Configure persistence (AOF/RDB) and backups (e.g., daily RDB snapshots).
+- Backups/restore: snapshot `dump.rdb` routinely; test restore drills quarterly.
+- Helm charts include resources, HPA, and PDB defaults; tune values per environment.
+
 # Services modular layout (scaffolding)
 
 - api-gateway: Front door (auth/rate limit/allowlist/schema validation). For now, existing FastAPI in iot-api-discovery plays this role.
