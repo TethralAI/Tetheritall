@@ -32,6 +32,8 @@ except Exception:
     Histogram = None  # type: ignore
     Counter = None  # type: ignore
 
+from fastapi.middleware.cors import CORSMiddleware
+
 _req_hist = None
 _cache_hits = None
 _cache_misses = None
@@ -85,6 +87,20 @@ def parse_allowlist(env_val: str | None) -> set[str]:
 def create_app() -> FastAPI:
     app = FastAPI(title="API Gateway (Lite)")
     _init_tracing("gateway")
+
+    # CORS and security headers
+    ALLOW_ORIGINS = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+    if ALLOW_ORIGINS:
+        app.add_middleware(CORSMiddleware, allow_origins=ALLOW_ORIGINS, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Content-Security-Policy"] = "default-src 'none'"
+        return resp
 
     API_TOKEN = os.getenv("API_TOKEN", "")
     REDIS_URL = os.getenv("REDIS_URL")

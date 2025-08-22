@@ -1,0 +1,20 @@
+name: canary-write
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  write_canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute idempotent write
+        env:
+          GATEWAY_BASE: ${{ secrets.SYNTHETICS_GATEWAY_BASE }}
+          API_TOKEN: ${{ secrets.SYNTHETICS_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY="canary-$(date +%s)"
+          curl -sS -X POST "$GATEWAY_BASE/proxy/integrations/capability/mock/device/switch/on" \
+            -H "x-api-key: $API_TOKEN" -H "Idempotency-Key: $KEY" -d '{}' -H 'content-type: application/json' | cat
