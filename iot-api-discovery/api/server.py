@@ -42,6 +42,7 @@ from storage.twins import store as twin_store
 from tools.llm.guard import LLMGuard
 from tools.energy.ocpi_client import OCPIClient
 from api.middleware import request_id_and_logging_middleware
+from tools.events.bus import bus
 
 # Optional OpenTelemetry setup
 try:
@@ -180,6 +181,10 @@ def create_app() -> FastAPI:
     app.include_router(alexa_router)
     app.include_router(st_events_router)
     app.include_router(st_sub_router)
+
+    @app.get("/events/health")
+    async def events_health() -> Dict[str, Any]:
+        return bus.health()
 
     @app.post("/scan/device", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:

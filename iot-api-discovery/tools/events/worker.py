@@ -114,6 +114,10 @@ async def outbox_publisher_loop() -> None:
                 # Mark attempt and schedule retry backoff if needed
                 row.attempts = (row.attempts or 0) + 1
                 row.available_at = datetime.utcnow()
+                # Poison-pill: drop after 10 attempts
+                if (row.attempts or 0) >= 10:
+                    session.delete(row)
+                    continue
                 # Simple policy: delete on publish success; keep for retry if None
                 if published_id:
                     session.delete(row)
@@ -131,8 +135,8 @@ async def run_worker() -> None:
                     event = {k.decode(): v.decode() if isinstance(v, bytes) else v for k, v in fields.items()}
                     await process_event(event)
                     bus.ack(GROUP, entry_id)
-                except Exception:
-                    # Leave unacked for redelivery or move to DLQ in future
+                except Exception as exc:
+                    # Leave unacked for redelivery; if Redis backend, rely on PEL retry; future: move to DLQ stream
                     pass
             await asyncio.sleep(0.1)
 
