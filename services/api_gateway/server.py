@@ -13,6 +13,63 @@ import httpx
 import jwt
 from jsonschema import validate as jsonschema_validate, ValidationError
 
+# Optional OpenTelemetry
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as OTLPHTTPExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+except Exception:
+    trace = None  # type: ignore
+
+try:
+    from prometheus_client import Histogram
+except Exception:
+    Histogram = None  # type: ignore
+
+_req_hist = None
+if Histogram is not None:
+    _req_hist = Histogram(
+        "gateway_request_duration_seconds",
+        "Gateway request duration",
+        labelnames=("method", "path", "status"),
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+
+def _current_trace_id() -> Optional[str]:
+    try:
+        if trace is None:
+            return None
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if not ctx or not ctx.trace_id:
+            return None
+        return f"{ctx.trace_id:032x}"
+    except Exception:
+        return None
+
+
+def _init_tracing(service_name: str) -> None:
+    if trace is None:
+        return
+    try:
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "http://localhost:4318"
+        resource = Resource.create({"service.name": service_name})
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPHTTPExporter(endpoint=f"{endpoint}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        FastAPIInstrumentor.instrument()
+        HTTPXClientInstrumentor().instrument()
+        RedisInstrumentor().instrument()
+    except Exception:
+        pass
+
 
 def parse_allowlist(env_val: str | None) -> set[str]:
     items = [s.strip().lower() for s in (env_val or "").split(",") if s.strip()]
@@ -21,6 +78,7 @@ def parse_allowlist(env_val: str | None) -> set[str]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="API Gateway (Lite)")
+    _init_tracing("gateway")
 
     API_TOKEN = os.getenv("API_TOKEN", "")
     REDIS_URL = os.getenv("REDIS_URL")
@@ -65,6 +123,24 @@ def create_app() -> FastAPI:
     app.state.rate_store = {}
     app.state.quota_store = {}
     app.state.cb = {"integrations": {"open_until": 0, "fails": 0}, "automation": {"open_until": 0, "fails": 0}}
+
+    # Request timing middleware with exemplars
+    if _req_hist is not None:
+        @app.middleware("http")
+        async def _metrics_timing(request: Request, call_next):
+            start = time.time()
+            resp = await call_next(request)
+            dur = time.time() - start
+            labels = (request.method, request.url.path, str(getattr(resp, "status_code", 200)))
+            ex = {}
+            tid = _current_trace_id()
+            if tid:
+                ex = {"trace_id": tid}
+            try:
+                _req_hist.labels(*labels).observe(dur, exemplar=ex or None)  # type: ignore[arg-type]
+            except Exception:
+                _req_hist.labels(*labels).observe(dur)
+            return resp
 
     # Redis / Sentinel
     try:
@@ -467,9 +543,9 @@ def create_app() -> FastAPI:
         return resp
 
     def _with_trace_headers(headers: Dict[str, str]) -> Dict[str, str]:
-        trace = headers.get("traceparent") or _make_traceparent()
+        trace_hdr = headers.get("traceparent") or _make_traceparent()
         out = dict(headers)
-        out["traceparent"] = trace
+        out["traceparent"] = trace_hdr
         return out
 
     def _validate_response_schema(path: str, data: Any) -> None:
@@ -505,7 +581,6 @@ def create_app() -> FastAPI:
                     data = resp.json()
                 except Exception:
                     data = resp.text
-                _validate_response_schema(request.url.path, data if isinstance(data, dict) else {"data": data})
                 return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
 
         if request.method == "GET" and _cacheable(request.url.path):

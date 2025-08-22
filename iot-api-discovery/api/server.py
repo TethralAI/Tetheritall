@@ -43,6 +43,67 @@ from tools.llm.guard import LLMGuard
 from tools.energy.ocpi_client import OCPIClient
 from api.middleware import request_id_and_logging_middleware
 
+# Optional OpenTelemetry setup
+try:
+    import os
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as OTLPHTTPExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+except Exception:
+    trace = None  # type: ignore
+
+try:
+    from prometheus_client import Histogram
+except Exception:
+    Histogram = None  # type: ignore
+
+_request_hist = None
+if Histogram is not None:
+    _request_hist = Histogram(
+        "api_request_duration_seconds",
+        "API request duration",
+        labelnames=("method", "path", "status"),
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+
+def _current_trace_id() -> Optional[str]:
+    try:
+        if trace is None:
+            return None
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if not ctx or not ctx.trace_id:
+            return None
+        return f"{ctx.trace_id:032x}"
+    except Exception:
+        return None
+
+
+def _init_tracing(service_name: str) -> None:
+    if trace is None:
+        return
+    try:
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "http://localhost:4318"
+        resource = Resource.create({"service.name": service_name})
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPHTTPExporter(endpoint=f"{endpoint}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        # Instrumentations
+        FastAPIInstrumentor.instrument()
+        HTTPXClientInstrumentor().instrument()
+        SQLAlchemyInstrumentor().instrument()
+        RedisInstrumentor().instrument()
+    except Exception:
+        pass
+
 
 class ScanRequest(BaseModel):
     manufacturer: str
@@ -54,9 +115,30 @@ class ScanRequest(BaseModel):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
+    _init_tracing("api")
     app.middleware("http")(request_id_and_logging_middleware)
     app.add_middleware(PrometheusMiddleware)
     app.add_route("/metrics", handle_metrics)
+
+    # Request timing middleware with exemplars
+    if _request_hist is not None:
+        @app.middleware("http")
+        async def _metrics_timing(request: Request, call_next):
+            start = time.time()
+            resp = await call_next(request)
+            dur = time.time() - start
+            labels = (request.method, request.url.path, str(getattr(resp, "status_code", 200)))
+            if _request_hist is not None:
+                ex = {}
+                tid = _current_trace_id()
+                if tid:
+                    ex = {"trace_id": tid}
+                try:
+                    _request_hist.labels(*labels).observe(dur, exemplar=ex or None)  # type: ignore[arg-type]
+                except Exception:
+                    _request_hist.labels(*labels).observe(dur)
+            return resp
+
     coordinator = CoordinatorAgent(CoordinatorConfig())
     engine = AutomationEngine()
     llm_guard = LLMGuard()

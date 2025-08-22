@@ -1,18 +1,14 @@
 {
   "annotations": {"list": []},
   "panels": [
-    {
-      "type": "stat",
-      "title": "API Requests/min",
-      "targets": [{"expr": "sum(rate(http_requests_total[1m]))"}]
-    },
-    {
-      "type": "graph",
-      "title": "HTTP Status Codes",
-      "targets": [
-        {"expr": "sum by(status)(rate(http_requests_total[5m]))"}
-      ]
-    }
+    {"type": "stat", "title": "API Requests/min", "targets": [{"expr": "sum(rate(http_requests_total[1m]))"}]},
+    {"type": "graph", "title": "HTTP Status Codes", "targets": [{"expr": "sum by(status)(rate(http_requests_total[5m]))"}]},
+    {"type": "graph", "title": "Gateway latency p95", "targets": [{"expr": "histogram_quantile(0.95, sum by (le)(rate(gateway_request_duration_seconds_bucket[5m])))"}]},
+    {"type": "graph", "title": "API latency p95", "targets": [{"expr": "histogram_quantile(0.95, sum by (le)(rate(api_request_duration_seconds_bucket[5m])))"}]},
+    {"type": "graph", "title": "Integrations latency p95", "targets": [{"expr": "histogram_quantile(0.95, sum by (le)(rate(integrations_request_duration_seconds_bucket[5m])))"}]},
+    {"type": "graph", "title": "Error rate (5xx)", "targets": [{"expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))"}]},
+    {"type": "graph", "title": "SLO burn fast", "targets": [{"expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))) / 0.01"}]},
+    {"type": "graph", "title": "SLO burn slow", "targets": [{"expr": "(sum(rate(http_requests_total{status=~\"5..\"}[1h])) / sum(rate(http_requests_total[1h]))) / 0.01"}]}
   ],
   "schemaVersion": 39,
   "title": "Tetheritall Overview",
