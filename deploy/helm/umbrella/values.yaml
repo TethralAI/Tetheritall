@@ -4,6 +4,10 @@ global:
   redisUrl: redis://redis:6379/0
   otelExporter: http://otel-collector.iot.svc.cluster.local:4318
 
+observability:
+  serviceMonitor:
+    enabled: false
+
 externalSecrets:
   enabled: true
   secretStore: eso
