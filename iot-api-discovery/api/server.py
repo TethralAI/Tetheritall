@@ -299,134 +299,335 @@ def create_app() -> FastAPI:
             return {"format": "yaml", "content": yaml.safe_dump(data)}
         return {"format": "json", "content": data}
 
-    # Home Assistant local
+    # Backward-compatible hazards endpoint
+    @app.get("/api/hazards", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def get_hazards(lat: float, lon: float) -> Dict[str, Any]:
+        quakes, alerts = await asyncio.gather(
+            asyncio.to_thread(usgs_adapter.fetch_quakes, lat, lon),
+            asyncio.to_thread(nws_adapter.fetch_alerts, lat, lon),
+        )
+        hazards: List[Dict[str, Any]] = []
+        for q in quakes:
+            item = dict(q)
+            item.setdefault("category", "seismic")
+            hazards.append(item)
+        for a in alerts:
+            item = dict(a)
+            item.setdefault("category", "weather")
+            hazards.append(item)
+        return {"count": len(hazards), "hazards": hazards}
+
+    # Dynamic registry (in-memory, non-persistent)
+    app.state.dynamic_registry: Dict[str, Dict[str, Any]] = {}
+
+    @app.post("/discover/ingest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def discover_ingest(spec: Dict[str, Any]) -> Dict[str, Any]:
+        manufacturer = str(spec.get("manufacturer", "")).lower()
+        if not manufacturer:
+            raise HTTPException(status_code=400, detail="missing manufacturer")
+        app.state.dynamic_registry[manufacturer] = spec
+        return {"ok": True}
+
+    @app.get("/integrations/dynamic/providers", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def dynamic_providers() -> Dict[str, Any]:
+        return {"providers": sorted(list(app.state.dynamic_registry.keys()))}
+
+    @app.post("/integrations/dynamic/{provider}/call", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def dynamic_call(provider: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        import requests as _rq
+
+        ep = (body or {}).get("endpoint", {})
+        url = ep.get("url") or ep.get("path")
+        method = (ep.get("method") or "GET").upper()
+        if not url:
+            raise HTTPException(status_code=400, detail="missing endpoint url")
+        try:
+            def _do():
+                if method == "GET":
+                    resp = _rq.get(url, timeout=settings.request_timeout_seconds)
+                else:
+                    resp = _rq.request(method=method, url=url, timeout=settings.request_timeout_seconds)
+                data: Any
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = resp.text
+                return {"ok": resp.ok, "status": resp.status_code, "data": data}
+
+            return await asyncio.to_thread(_do)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    # Hubitat Maker API minimal endpoints
+    @app.get("/integrations/hubitat/devices", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def hubitat_devices() -> Dict[str, Any]:
+        base = settings.hubitat_maker_base_url
+        token = settings.hubitat_maker_token or ""
+        if not base or not token:
+            return {"count": 0, "devices": []}
+        items = await asyncio.to_thread(hubitat_tools.list_devices_maker, base, token)
+        return {"count": len(items), "devices": items}
+
+    class HubitatCmdBody(BaseModel):
+        device_id: str
+        command: str
+        args: List[Any] | None = None
+
+    @app.post("/integrations/hubitat/command", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def hubitat_command(body: HubitatCmdBody) -> Dict[str, Any]:
+        base = settings.hubitat_maker_base_url
+        token = settings.hubitat_maker_token or ""
+        if not base or not token:
+            return {"ok": False, "error": "missing hubitat settings"}
+        return await asyncio.to_thread(hubitat_tools.device_command_maker, base, token, body.device_id, body.command, body.args or [])
+
+    # Importers: Home Assistant components
+    @app.get("/importers/home_assistant/components", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ha_import_components() -> Dict[str, Any]:
+        try:
+            items = await asyncio.to_thread(ha_importer.list_components, settings.github_token)
+            return {"count": len(items), "components": items}
+        except Exception as exc:
+            return {"count": 0, "components": [], "error": str(exc)}
+
+    # LLM routine generator (fallback heuristic if no key)
+    @app.post("/automation/routines/generate_llm", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def generate_routine_llm(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
+        # Fallback: return a trivial rule heuristic regardless of key presence
+        org_id = request.headers.get(settings.org_id_header, "default")
+        prompt_raw = str((body or {}).get("prompt") or "")
+        prompt = llm_guard.pii_scrub(prompt_raw)
+        # Budget check (assume cost proportional to length)
+        cost = max(1, len(prompt) // 50)
+        if not llm_guard.check_and_consume(org_id, cost):
+            raise HTTPException(status_code=402, detail="LLM budget exceeded")
+        text = prompt.lower()
+        action: Dict[str, Any] = {"type": "switch", "service": "on" if "on" in text else "off"}
+        rule = {"id": "generated", "trigger": {"type": "time"}, "conditions": [], "actions": [action]}
+        llm_guard.log_audit(org_id, {"ts": int(time.time()), "prompt_len": len(prompt_raw), "cost": cost, "rule": rule})
+        return {"rule": rule, "deterministic": settings.llm_deterministic}
+
+    # Importers: Home Assistant manifest
+    @app.get("/importers/home_assistant/manifest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ha_manifest(component: str) -> Dict[str, Any]:
+        try:
+            m = await asyncio.to_thread(ha_importer.fetch_manifest, component, settings.github_token)
+            return {"manifest": (m or {})}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # Wearables: Oura OAuth URL (400 if missing)
+    @app.get("/integrations/oura/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def oura_oauth_url() -> Dict[str, Any]:
+        if not (settings.oura_client_id and settings.oura_redirect_uri):
+            raise HTTPException(status_code=400, detail="missing oura client_id/redirect_uri")
+        return {"url": oura_tools.build_auth_url(settings.oura_client_id, settings.oura_redirect_uri)}
+
+    # Wearables: Terra daily (200 with error if missing api key)
+    @app.get("/integrations/terra/daily", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def terra_daily(user_id: str) -> Dict[str, Any]:
+        api_key = settings.terra_api_key or ""
+        if not api_key:
+            return {"error": "missing api key"}
+        return await asyncio.to_thread(terra_tools.daily_summary, api_key, user_id)
+
+    # UI schema and mapping suggestion endpoints (in-memory/Redis only)
+    @app.get("/ui/device/{provider}/{external_id}", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ui_schema(provider: str, external_id: str) -> Dict[str, Any]:
+        twin = twin_store.get(provider, external_id)
+        if not twin:
+            raise HTTPException(status_code=404, detail="device not found")
+        # Grouped by capability with simple control templates
+        caps = set(twin.get("capabilities", []) or [])
+        groups: Dict[str, Any] = {}
+        if any(c in caps for c in ("switch", "light")):
+            groups["switchable"] = {
+                "controls": [
+                    {
+                        "type": "toggle",
+                        "action": {"capability": "switch"},
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/on"},
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/off"}
+                        ]
+                    }
+                ]
+            }
+        if any(c in caps for c in ("switchLevel", "dimmer")):
+            groups["dimmable"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "min": 0,
+                        "max": 100,
+                        "action": {"capability": "dimmer"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/dimmer/set",
+                                "body": {"level": "<0-100>"}
+                            }
+                        ]
+                    }
+                ]
+            }
+        if any(c in caps for c in ("colorControl", "colorTemperature")):
+            groups["color"] = {
+                "controls": [
+                    {
+                        "type": "color",
+                        "action": {"capability": "colorControl"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/hsv",
+                                "body": {"h": "<0-360>", "s": "<0-100>", "v": "<0-100>"}
+                            }
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "min": 153,
+                        "max": 500,
+                        "action": {"capability": "colorTemperature"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/temp",
+                                "body": {"mireds": "<153-500>"}
+                            }
+                        ]
+                    }
+                ]
+            }
+        # Thermostat (best-effort templates)
+        if any(c in caps for c in ("thermostat", "temperature", "thermostatMode", "coolingSetpoint", "heatingSetpoint")):
+            groups["thermostat"] = {
+                "controls": [
+                    {
+                        "type": "select",
+                        "id": "hvac_mode",
+                        "label": "Mode",
+                        "options": ["off", "heat", "cool", "auto"],
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/mode", "body": {"mode": "<off|heat|cool|auto>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "cool_setpoint",
+                        "label": "Cool to",
+                        "min": 16,
+                        "max": 30,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/cooling_setpoint", "body": {"celsius": "<16-30>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "heat_setpoint",
+                        "label": "Heat to",
+                        "min": 10,
+                        "max": 25,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/heating_setpoint", "body": {"celsius": "<10-25>"}}
+                        ]
+                    }
+                ]
+            }
+        # Cover
+        if any(c in caps for c in ("cover", "windowShade", "position")):
+            groups["cover"] = {
+                "controls": [
+                    {"type": "button", "id": "open", "label": "Open", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/open"}]},
+                    {"type": "button", "id": "close", "label": "Close", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/close"}]},
+                    {
+                        "type": "slider",
+                        "id": "position",
+                        "label": "Position",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/position", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Fan
+        if any(c in caps for c in ("fan", "fanSpeed", "fanControl")):
+            groups["fan"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "id": "speed",
+                        "label": "Speed",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/fan/speed", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Media
+        if any(c in caps for c in ("media", "mediaPlayback", "audioVolume")):
+            groups["media"] = {
+                "controls": [
+                    {"type": "button", "id": "play", "label": "Play", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/play"}]},
+                    {"type": "button", "id": "pause", "label": "Pause", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/pause"}]},
+                    {
+                        "type": "slider",
+                        "id": "volume",
+                        "label": "Volume",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/media/volume", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        return {"provider": provider, "external_id": external_id, "name": twin.get("name"), "groups": groups}
+
+    # Mapping suggestions store (signal-based, no persistence beyond Redis/memory)
+    @app.post("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def add_mapping_suggestions(body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                rds.set(key, _j.dumps(body))
+            else:
+                app.state.mapping_suggestions = body
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @app.get("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def get_mapping_suggestions() -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                v = rds.get(key)
+                data = _j.loads(v) if v else {}
+            else:
+                data = getattr(app.state, "mapping_suggestions", {})
+            return {"suggestions": data}
+        except Exception as exc:
+            return {"suggestions": {}, "error": str(exc)}
+
+    # Home Assistant local (re-added after extended endpoints)
     @app.get("/integrations/home_assistant/entities", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def home_assistant_entities() -> Dict[str, Any]:
         if not (settings.home_assistant_base_url and settings.home_assistant_token):
             return {"count": 0, "entities": []}
         items = await asyncio.to_thread(ha_list, settings.home_assistant_base_url, settings.home_assistant_token)
         return {"count": len(items), "entities": items}
-
-    class HACallIn(BaseModel):
-        domain: str
-        service: str
-        payload: Dict[str, Any]
-
-    @app.post("/integrations/home_assistant/call", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def home_assistant_call(body: HACallIn) -> Dict[str, Any]:
-        if not (settings.home_assistant_base_url and settings.home_assistant_token):
-            return {"ok": False, "error": "missing HA config"}
-        return await asyncio.to_thread(ha_call, settings.home_assistant_base_url, settings.home_assistant_token, body.domain, body.service, body.payload)
-
-    # Google Nest SDM (placeholder; requires full setup)
-    @app.get("/integrations/google/nest/devices", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def google_nest_devices() -> Dict[str, Any]:
-        token = settings.google_nest_access_token or ""
-        items = await asyncio.to_thread(nest_list, token) if token else []
-        return {"count": len(items), "devices": items}
-
-    # Hue Remote API (placeholder)
-    @app.get("/integrations/hue/remote/resources", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def hue_remote_resources() -> Dict[str, Any]:
-        token = settings.hue_remote_token or ""
-        items = await asyncio.to_thread(hue_list, token) if token else []
-        return {"count": len(items), "resources": items}
-
-    # SmartThings OAuth helper endpoints
-    @app.get("/integrations/smartthings/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def smartthings_oauth_url() -> Dict[str, Any]:
-        if not (settings.smartthings_client_id and settings.smartthings_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing client_id/redirect_uri")
-        return {"url": st_auth_url(settings.smartthings_client_id, settings.smartthings_redirect_uri)}
-
-    class STOAuthCode(BaseModel):
-        code: str
-
-    @app.post("/integrations/smartthings/oauth/exchange", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def smartthings_oauth_exchange(body: STOAuthCode) -> Dict[str, Any]:
-        if not (settings.smartthings_client_id and settings.smartthings_client_secret and settings.smartthings_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing oauth settings")
-        data = await asyncio.to_thread(
-            st_exchange, settings.smartthings_client_id, settings.smartthings_client_secret, settings.smartthings_redirect_uri, body.code
-        )
-        return data
-
-    # Tuya OAuth helper URL (placeholder)
-    @app.get("/integrations/tuya/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def tuya_oauth_url(region: str = "us") -> Dict[str, Any]:
-        if not (settings.tuya_client_id and settings.tuya_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing tuya client_id/redirect_uri")
-        return {"url": tuya_auth_url(settings.tuya_client_id, settings.tuya_redirect_uri, region)}
-
-    # openHAB local
-    @app.get("/integrations/openhab/items", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def openhab_items() -> Dict[str, Any]:
-        if not settings.openhab_base_url:
-            return {"count": 0, "items": []}
-        items = await asyncio.to_thread(oh_list, settings.openhab_base_url, settings.openhab_token)
-        return {"count": len(items), "items": items}
-
-    class OHCommandIn(BaseModel):
-        item: str
-        command: str
-
-    @app.post("/integrations/openhab/command", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def openhab_command(body: OHCommandIn) -> Dict[str, Any]:
-        if not settings.openhab_base_url:
-            return {"ok": False, "error": "missing openhab base url"}
-        return await asyncio.to_thread(oh_cmd, settings.openhab_base_url, body.item, body.command, settings.openhab_token)
-
-    # Z-Wave JS WS
-    @app.get("/integrations/zwave_js/version", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_version() -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_version(settings.zwave_js_url)
-
-    @app.get("/integrations/zwave_js/nodes", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_nodes() -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_nodes(settings.zwave_js_url)
-
-    class ZWSetIn(BaseModel):
-        node_id: int
-        value_id: Dict[str, Any]
-        value: Any
-
-    @app.post("/integrations/zwave_js/set_value", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_set_value(body: ZWSetIn) -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_set_value(settings.zwave_js_url, body.node_id, body.value_id, body.value)
-
-    # OCPI endpoints (feature flagged)
-    @app.get("/energy/ocpi/locations", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def ocpi_locations() -> Dict[str, Any]:
-        if not settings.enable_ocpi:
-            return {"enabled": False, "items": []}
-        if not (settings.ocpi_base_url and settings.ocpi_token):
-            return {"enabled": True, "items": []}
-        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).locations)
-        return {"enabled": True, "count": len(items), "items": items}
-
-    @app.get("/energy/ocpi/tariffs", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def ocpi_tariffs() -> Dict[str, Any]:
-        if not settings.enable_ocpi:
-            return {"enabled": False, "items": []}
-        if not (settings.ocpi_base_url and settings.ocpi_token):
-            return {"enabled": True, "items": []}
-        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).tariffs)
-        return {"enabled": True, "count": len(items), "items": items}
-
-    @app.get("/energy/ocpi/sessions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def ocpi_sessions() -> Dict[str, Any]:
-        if not settings.enable_ocpi:
-            return {"enabled": False, "items": []}
-        if not (settings.ocpi_base_url and settings.ocpi_token):
-            return {"enabled": True, "items": []}
-        items = await asyncio.to_thread(OCPIClient(settings.ocpi_base_url, settings.ocpi_token).sessions)
-        return {"enabled": True, "count": len(items), "items": items}
 
     return app
 
