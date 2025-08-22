@@ -67,28 +67,11 @@ class Settings(BaseSettings):
     llm_budgets: str | None = None  # e.g., "default:1000,orgA:500"
     llm_deterministic: bool = True
     llm_allowed_tools: str | None = None  # comma-separated
-    # Hubitat Maker API (optional)
-    hubitat_maker_base_url: str | None = None  # e.g., http://hubitat.local/apps/api/<appId>
-    hubitat_maker_token: str | None = None
-    # Philips Hue Local
-    hue_bridge_ip: str | None = None
-    hue_username: str | None = None
-    # Ecobee
-    ecobee_api_key: str | None = None
-    ecobee_access_token: str | None = None
-    # Tesla Fleet API
-    tesla_client_id: str | None = None
-    tesla_client_secret: str | None = None
-    tesla_redirect_uri: str | None = None
-    # Enphase Enlighten
-    enphase_api_key: str | None = None
-    enphase_user_id: str | None = None
-    # SolarEdge
-    solaredge_api_key: str | None = None
     # Infra
     redis_url: str | None = None
     # Outbound security
     outbound_allowlist: str | None = None  # comma-separated hostnames or domains
+    outbound_cidrs: str | None = None  # comma-separated CIDR blocks
     # Edge agent and telemetry
     edge_lan_only: bool = True
     telemetry_opt_in: bool = False
@@ -97,22 +80,27 @@ class Settings(BaseSettings):
     enable_ocpi: bool = False
     ocpi_base_url: str | None = None
     ocpi_token: str | None = None
-    # Integrations service (Phase 2)
-    integrations_base_url: str | None = None  # e.g., http://integrations:8100
+    # Proxy/capability
     proxy_capabilities_via_integrations: bool = False
-    # Wearables / health
+    integrations_base_url: str | None = None  # e.g., http://integrations:8100
+    proxy_canary_percent: int = 0  # 0-100
+    # JWT auth (optional)
+    jwt_secret: str | None = None
+    jwt_audience: str | None = None
+    org_allowlist: str | None = None
+    org_denylist: str | None = None
+    # Gateway caching hints
+    cache_get_prefixes: str | None = None
+    cache_ttl_seconds: int = 60
+    # LLM denylist
+    llm_prompt_denylist: str | None = None
+    # Wearables / health (restore for tests)
     oura_client_id: str | None = None
-    oura_client_secret: str | None = None
     oura_redirect_uri: str | None = None
-    fitbit_client_id: str | None = None
-    fitbit_client_secret: str | None = None
-    fitbit_redirect_uri: str | None = None
-    dexcom_client_id: str | None = None
-    dexcom_client_secret: str | None = None
-    dexcom_redirect_uri: str | None = None
     terra_api_key: str | None = None
-    # Encryption
-    encryption_key: str | None = None  # base64 fernet key
+    # Hubitat Maker API (optional)
+    hubitat_maker_base_url: str | None = None  # e.g., http://hubitat.local/apps/api/<appId>
+    hubitat_maker_token: str | None = None
 
     class Config:
         env_file = ".env"
