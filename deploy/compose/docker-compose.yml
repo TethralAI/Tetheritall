@@ -1,0 +1,42 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  api:
+    build: ./iot-api-discovery
+    command: uvicorn api.server:app --host 0.0.0.0 --port 8000
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    ports: ["8000:8000"]
+    depends_on: [redis]
+
+  integrations:
+    build: ./iot-api-discovery
+    command: uvicorn services.integrations.server:app --host 0.0.0.0 --port 8100
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    ports: ["8100:8100"]
+    depends_on: [redis]
+
+  gateway:
+    build: ./iot-api-discovery
+    command: uvicorn services.api_gateway.server:app --host 0.0.0.0 --port 8001
+    environment:
+      - API_TOKEN=${API_TOKEN}
+      - REDIS_URL=redis://redis:6379/0
+      - INTEGRATIONS_BASE_URL=http://integrations:8100
+      - OUTBOUND_ALLOWLIST=integrations
+    ports: ["8001:8001"]
+    depends_on: [integrations, redis]
+
+  edge:
+    build: ./iot-api-discovery
+    command: uvicorn services.edge_agent.server:app --host 0.0.0.0 --port 8200
+    environment:
+      - EDGE_LAN_ONLY=true
+      - REDIS_URL=redis://redis:6379/0
+    network_mode: host
+    depends_on: [redis]
+
