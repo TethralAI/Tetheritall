@@ -1,0 +1,57 @@
+name: synthetics
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  canaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run synthetic checks
+        env:
+          API_BASE: ${{ secrets.SYNTHETICS_API_BASE }}
+          GATEWAY_BASE: ${{ secrets.SYNTHETICS_GATEWAY_BASE }}
+          API_TOKEN: ${{ secrets.SYNTHETICS_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys, json, urllib.request
+
+          def check(url, headers=None):
+              req = urllib.request.Request(url, headers=headers or {})
+              with urllib.request.urlopen(req, timeout=10) as r:
+                  code = r.getcode()
+                  body = r.read().decode()
+                  print(url, code)
+                  if code != 200:
+                      print(body)
+                      sys.exit(1)
+
+          api = os.environ.get('API_BASE')
+          gw = os.environ.get('GATEWAY_BASE')
+          token = os.environ.get('API_TOKEN')
+
+          if not api or not gw:
+              print('Missing API_BASE or GATEWAY_BASE'); sys.exit(1)
+
+          # API health
+          check(f"{api.rstrip('/')}/health")
+
+          # Gateway health
+          check(f"{gw.rstrip('/')}/health", headers={"x-api-key": token or ""})
+
+          # Basic GET via gateway to integrations
+          import urllib.parse
+          target = urllib.parse.quote(f"{api.rstrip('/')}/metrics", safe='')
+          check(f"{gw.rstrip('/')}/proxy?url={target}", headers={"x-api-key": token or ""})
+          PY
