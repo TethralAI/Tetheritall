@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request, HTTPException
 
 from config.settings import settings
 from storage.twins import store as twin_store
+from tools.events.bus import bus
 
 try:
     import redis  # type: ignore
@@ -89,6 +90,8 @@ async def smartthings_webhook(request: Request) -> Dict[str, Any]:
             dev = e.get("deviceEvent") or {}
             if _seen(dev.get("eventId", "")):
                 continue
+            # Publish to event bus
+            bus.publish("smartthings.device_event", dev)
             device_id = dev.get("deviceId")
             name = dev.get("displayName")
             capability = dev.get("capability")
