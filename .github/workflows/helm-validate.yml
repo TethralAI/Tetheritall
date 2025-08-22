@@ -31,3 +31,15 @@ jobs:
         run: |
           helm template tetheritall deploy/helm/umbrella -n iot -f deploy/helm/umbrella/values-dev.yaml \
             | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.27.0
+      - name: Trivy scan rendered images (informational)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: config
+          hide-progress: true
+          exit-code: '0'
+          format: 'table'
+      - name: Generate SBOM (Syft) for images
+        uses: anchore/sbom-action@v0
+        with:
+          artifact-name: sbom-spdx
+          format: spdx-json

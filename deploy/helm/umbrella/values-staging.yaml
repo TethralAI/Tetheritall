@@ -1,0 +1,15 @@
+namespace: iot-staging
+ingress:
+  enabled: true
+  host: staging.example.com
+  className: nginx
+  tlsSecret: gateway-tls-staging
+observability:
+  serviceMonitor:
+    enabled: false
+api:
+  replicaCount: 2
+integrations:
+  replicaCount: 2
+gateway:
+  replicaCount: 2

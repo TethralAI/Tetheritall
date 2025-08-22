@@ -17,6 +17,8 @@ spec:
 {{- toYaml .Values.podAnnotations | nindent 8 }}
     spec:
       serviceAccountName: {{ .Values.serviceAccountName | default "gateway-sa" }}
+      priorityClassName: app-standard
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -51,6 +53,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
           ports:
             - containerPort: {{ .Values.service.port }}
           livenessProbe:
