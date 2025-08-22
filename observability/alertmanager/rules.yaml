@@ -8,3 +8,21 @@ groups:
           severity: warning
         annotations:
           summary: High 5xx rate detected
+  - name: slo-burn
+    rules:
+      # Short window burn (fast burn)
+      - alert: SLOErrorBudgetBurnFast
+        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))) > 0.05
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Error budget burning fast (5m)
+      # Long window burn (slow burn)
+      - alert: SLOErrorBudgetBurnSlow
+        expr: (sum(rate(http_requests_total{status=~"5.."}[1h])) / sum(rate(http_requests_total[1h]))) > 0.02
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: Error budget burning slow (1h)
