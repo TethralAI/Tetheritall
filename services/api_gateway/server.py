@@ -33,6 +33,7 @@ except Exception:
     Counter = None  # type: ignore
 
 from fastapi.middleware.cors import CORSMiddleware
+import hmac
 
 _req_hist = None
 _cache_hits = None
@@ -103,6 +104,11 @@ def create_app() -> FastAPI:
         return resp
 
     API_TOKEN = os.getenv("API_TOKEN", "")
+    API_TOKENS = [t.strip() for t in (os.getenv("API_TOKENS") or "").split(",") if t.strip()]
+    if API_TOKEN:
+        API_TOKENS.append(API_TOKEN)
+    app.state.api_tokens = set(API_TOKENS)
+
     REDIS_URL = os.getenv("REDIS_URL")
     OUTBOUND_ALLOWLIST = parse_allowlist(os.getenv("OUTBOUND_ALLOWLIST"))
     INTEGRATIONS_BASE_URL = os.getenv("INTEGRATIONS_BASE_URL") or os.getenv("INTEGRATIONS_BASE_URL".lower())
@@ -143,10 +149,16 @@ def create_app() -> FastAPI:
     RBAC_POLICIES_ENV = os.getenv("RBAC_POLICIES")
     RBAC_POLICIES_FILE = os.getenv("RBAC_POLICIES_FILE")
 
-    # Simple in-memory RL and quotas fallback
-    app.state.rate_store = {}
-    app.state.quota_store = {}
-    app.state.cb = {"integrations": {"open_until": 0, "fails": 0}, "automation": {"open_until": 0, "fails": 0}}
+    def _api_key_valid(presented: str) -> bool:
+        if not app.state.api_tokens:
+            return True
+        for token in app.state.api_tokens:
+            try:
+                if hmac.compare_digest(presented, token):
+                    return True
+            except Exception:
+                continue
+        return False
 
     # Request timing middleware with exemplars
     if _req_hist is not None:
@@ -260,6 +272,16 @@ def create_app() -> FastAPI:
                     app.state.jwks = {"fetched": now, "keys": keys}
         except Exception:
             pass
+
+    @app.post("/admin/jwks/refresh")
+    async def admin_jwks_refresh(request: Request) -> Dict[str, Any]:
+        token = request.headers.get("X-API-Key", "")
+        if not _api_key_valid(token):
+            raise HTTPException(status_code=401, detail="invalid api key")
+        # force next fetch by resetting cache time
+        app.state.jwks["fetched"] = 0
+        await _fetch_jwks()
+        return {"ok": True, "keys": list(app.state.jwks.get("keys", {}).keys())}
 
     def _key_for_kid(kid: str) -> Any | None:
         k = app.state.jwks.get("keys", {}).get(kid)
@@ -439,7 +461,6 @@ def create_app() -> FastAPI:
             for key in app.state.redis.scan_iter(pat):  # type: ignore[attr-defined]
                 k = key.decode() if isinstance(key, bytes) else str(key)
                 for p in prefixes:
-                    # org-aware keys store path after second colon
                     path = k.split(":", 2)[-1]
                     if path.startswith(p):
                         app.state.redis.delete(key)
@@ -464,7 +485,6 @@ def create_app() -> FastAPI:
             _cache_misses.labels(path).inc()  # type: ignore
         resp = await perform_request()
         try:
-            # only cache 2xx
             if getattr(resp, "status_code", 200) < 300:
                 app.state.redis.setex(key, CACHE_TTL, json.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
         except Exception:
@@ -496,17 +516,14 @@ def create_app() -> FastAPI:
             except ValidationError as ve:
                 if STRICT_RESPONSE_SCHEMA:
                     raise HTTPException(status_code=502, detail=f"response schema validation failed: {ve.message}")
-                # else best-effort
                 pass
 
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
-        # API Key allow-list (simple)
         token = request.headers.get("X-API-Key", "")
-        if API_TOKEN and token != API_TOKEN:
+        if app.state.api_tokens and not _api_key_valid(token):
             return _error("UNAUTHORIZED", 401, "invalid api key")
 
-        # JWT (optional) -> org (and possibly roles on request.state)
         try:
             org_id = await _verify_jwt(request)
         except HTTPException as he:
@@ -517,7 +534,6 @@ def create_app() -> FastAPI:
             raise
         request.state.org_id = org_id
 
-        # Rate limit per-IP using Redis if available else in-memory
         client_ip = request.client.host if request.client else "unknown"
         key = _bucket_key(client_ip, org_id, request.url.path)
         limit = RL_RPS
@@ -537,16 +553,13 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        # Quotas: enforce on mutating requests and capability actions
         if _is_mutating(request.method):
-            # increment counters then check against thresholds
             _quota_inc(org_id)
             try:
                 _quota_check(org_id)
             except HTTPException as he:
                 return _error("QUOTA_EXCEEDED", he.status_code, he.detail or "quota exceeded")
 
-        # RBAC: enforce for proxy capability paths
         roles = _get_roles(request)
         try:
             _rbac_check(org_id, roles, request.method, request.url.path)
@@ -561,9 +574,8 @@ def create_app() -> FastAPI:
 
     @app.post("/cache/invalidate")
     async def cache_invalidate(request: Request) -> Dict[str, Any]:
-        # Requires API key if configured
         token = request.headers.get("X-API-Key", "")
-        if API_TOKEN and token != API_TOKEN:
+        if app.state.api_tokens and not _api_key_valid(token):
             raise HTTPException(status_code=401, detail="invalid api key")
         body = await request.json()
         prefixes = body.get("prefixes") or []
