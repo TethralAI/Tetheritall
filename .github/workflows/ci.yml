@@ -66,16 +66,46 @@ jobs:
 
           pact = Consumer('gateway').has_pact_with(Provider('integrations'), port=8999)
           pact.start_service()
-          expected = {'ok': True}
+
+          # Health
+          expected_health = {'ok': True}
           (pact
             .given('integrations is healthy')
             .upon_receiving('a health check')
             .with_request('get', '/health')
-            .will_respond_with(200, body=expected))
+            .will_respond_with(200, body=expected_health))
+
+          # Switch ON
+          (pact
+            .given('device abc exists')
+            .upon_receiving('switch on command')
+            .with_request('post', '/capability/smartthings/abc/switch/on')
+            .will_respond_with(200, body={'ok': True}))
+
+          # Dimmer set
+          body = {'level': 50}
+          (pact
+            .given('device abc supports dimmer')
+            .upon_receiving('dimmer set command')
+            .with_request('post', '/capability/smartthings/abc/dimmer/set', body=body)
+            .will_respond_with(200, body={'ok': True}))
+
           with pact:
+            # health
             req = Request('http://localhost:8999/health')
             resp = urlopen(req)
             assert resp.getcode() == 200
+            # switch on
+            req2 = Request('http://localhost:8999/capability/smartthings/abc/switch/on', method='POST')
+            resp2 = urlopen(req2)
+            assert resp2.getcode() == 200
+            # dimmer set
+            data = json.dumps({'level': 50}).encode()
+            req3 = Request('http://localhost:8999/capability/smartthings/abc/dimmer/set', data=data, method='POST')
+            req3.add_header('content-type', 'application/json')
+            resp3 = urlopen(req3)
+            assert resp3.getcode() == 200
+
           pact.stop_service()
           PY
   docker:
