@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import json
+import secrets
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request, HTTPException
@@ -37,6 +39,8 @@ def create_app() -> FastAPI:
     JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
     ORG_ALLOWLIST = parse_allowlist(os.getenv("ORG_ALLOWLIST"))
     ORG_DENYLIST = parse_allowlist(os.getenv("ORG_DENYLIST"))
+    JWKS_URL = os.getenv("JWKS_URL")
+    JWKS_CACHE_SECONDS = int(os.getenv("JWKS_CACHE_SECONDS", "300"))
     # mTLS
     MTLS_CA = os.getenv("MTLS_CA_PATH")
     MTLS_CERT = os.getenv("MTLS_CLIENT_CERT_PATH")
@@ -51,11 +55,25 @@ def create_app() -> FastAPI:
     app.state.rate_store = {}
     app.state.cb = {"integrations": {"open_until": 0, "fails": 0}, "automation": {"open_until": 0, "fails": 0}}
 
+    # Redis / Sentinel
     try:
         import redis  # type: ignore
-        app.state.redis = redis.Redis.from_url(REDIS_URL) if REDIS_URL else None
+        sentinel_cfg = os.getenv("REDIS_SENTINEL")
+        sentinel_master = os.getenv("REDIS_SENTINEL_MASTER")
+        if sentinel_cfg and sentinel_master:
+            from redis.sentinel import Sentinel  # type: ignore
+            hosts = []
+            for item in sentinel_cfg.split(","):
+                host, _, port = item.partition(":")
+                hosts.append((host.strip(), int(port or 26379)))
+            snt = Sentinel(hosts, socket_timeout=0.5)
+            app.state.redis = snt.master_for(sentinel_master)
+        else:
+            app.state.redis = redis.Redis.from_url(REDIS_URL) if REDIS_URL else None
     except Exception:
         app.state.redis = None
+
+    app.state.jwks = {"fetched": 0, "keys": {}}
 
     def is_allowed_host(url: str) -> bool:
         if not OUTBOUND_ALLOWLIST:
@@ -70,15 +88,56 @@ def create_app() -> FastAPI:
     def _bucket_key(ip: str, org: str, path: str) -> str:
         return f"rl2:{org}:{ip}:{path}:{int(time.time())}"
 
-    def _verify_jwt(request: Request) -> str:
-        if not JWT_SECRET:
+    async def _fetch_jwks() -> None:
+        if not JWKS_URL:
+            return
+        now = int(time.time())
+        if now - app.state.jwks.get("fetched", 0) < JWKS_CACHE_SECONDS:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(JWKS_URL)
+                if r.status_code == 200:
+                    data = r.json()
+                    keys = {k["kid"]: k for k in data.get("keys", []) if "kid" in k}
+                    app.state.jwks = {"fetched": now, "keys": keys}
+        except Exception:
+            pass
+
+    def _key_for_kid(kid: str) -> Any | None:
+        k = app.state.jwks.get("keys", {}).get(kid)
+        if not k:
+            return None
+        # For PyJWT, use the public key in PEM if provided; otherwise, construct from components is nontrivial; fallback to jwk
+        try:
+            return jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(k))
+        except Exception:
+            return None
+
+    def _make_traceparent() -> str:
+        version = "00"
+        trace_id = secrets.token_hex(16)
+        parent_id = secrets.token_hex(8)
+        flags = "01"
+        return f"{version}-{trace_id}-{parent_id}-{flags}"
+
+    async def _verify_jwt(request: Request) -> str:
+        if JWKS_URL:
+            await _fetch_jwks()
+        if not JWT_SECRET and not JWKS_URL:
             return request.headers.get(ORG_ID_HEADER, "default")
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="missing bearer token")
         token = auth.split(" ", 1)[1]
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=JWT_AUDIENCE) if JWT_AUDIENCE else jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            header = jwt.get_unverified_header(token)
+            alg = header.get("alg")
+            if JWKS_URL and header.get("kid"):
+                key = _key_for_kid(header["kid"]) or JWT_SECRET
+                payload = jwt.decode(token, key=key, algorithms=[alg] if alg else ["RS256", "HS256"], audience=JWT_AUDIENCE) if JWT_AUDIENCE else jwt.decode(token, key=key, algorithms=[alg] if alg else ["RS256", "HS256"])  # type: ignore[arg-type]
+            else:
+                payload = jwt.decode(token, JWT_SECRET, algorithms=[alg] if alg else ["HS256"], audience=JWT_AUDIENCE) if JWT_AUDIENCE else jwt.decode(token, JWT_SECRET, algorithms=[alg] if alg else ["HS256"])  # type: ignore[arg-type]
             org = str(payload.get("org") or payload.get("tenant") or request.headers.get(ORG_ID_HEADER) or "default")
             if ORG_DENYLIST and org in ORG_DENYLIST:
                 raise HTTPException(status_code=403, detail="org denied")
@@ -97,10 +156,9 @@ def create_app() -> FastAPI:
         if not app.state.redis or not key:
             return None
         try:
-            import json as _j
             val = app.state.redis.get(_idempotency_key(path, key))
             if val:
-                data = _j.loads(val)
+                data = json.loads(val)
                 return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
         except Exception:
             return None
@@ -110,9 +168,8 @@ def create_app() -> FastAPI:
         if not app.state.redis or not key:
             return
         try:
-            import json as _j
             payload = {"status": response.status_code, "body": getattr(response, "body", b"").decode() if hasattr(response, "body") else response.body}
-            app.state.redis.setex(_idempotency_key(path, key), IDEMP_TTL, _j.dumps(payload))
+            app.state.redis.setex(_idempotency_key(path, key), IDEMP_TTL, json.dumps(payload))
         except Exception:
             pass
 
@@ -124,7 +181,7 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=401, content={"detail": "invalid api key"})
 
         # JWT (optional)
-        org_id = _verify_jwt(request)
+        org_id = await _verify_jwt(request)
 
         # Rate limit per-IP using Redis if available else in-memory
         client_ip = request.client.host if request.client else "unknown"
@@ -164,8 +221,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=413, detail="payload too large")
             if STRICT_JSON and request.headers.get("content-type", "").startswith("application/json"):
                 try:
-                    import json as _j
-                    data = _j.loads(body or b"{}")
+                    data = json.loads(body or b"{}")
                     if not isinstance(data, dict):
                         raise HTTPException(status_code=422, detail="json body must be an object")
                 except HTTPException:
@@ -219,8 +275,7 @@ def create_app() -> FastAPI:
         try:
             val = app.state.redis.get(key)
             if val:
-                import json as _j
-                data = _j.loads(val)
+                data = json.loads(val)
                 return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
         except Exception:
             pass
@@ -228,8 +283,7 @@ def create_app() -> FastAPI:
         try:
             # only cache 2xx
             if getattr(resp, "status_code", 200) < 300:
-                import json as _j
-                app.state.redis.setex(key, CACHE_TTL, _j.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
+                app.state.redis.setex(key, CACHE_TTL, json.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
         except Exception:
             pass
         return resp
@@ -245,6 +299,12 @@ def create_app() -> FastAPI:
             _store_idempotent_response(path, key, resp)
         return resp
 
+    def _with_trace_headers(headers: Dict[str, str]) -> Dict[str, str]:
+        trace = headers.get("traceparent") or _make_traceparent()
+        out = dict(headers)
+        out["traceparent"] = trace
+        return out
+
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -258,6 +318,7 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
                 body = await _validate_json_body(request)
                 headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
+                headers = _with_trace_headers(headers)
                 try:
                     resp = await client.request(request.method, target, content=body, headers=headers)
                     _record_cb("integrations", resp.status_code < 500)
@@ -289,6 +350,7 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
                 body = await _validate_json_body(request)
                 headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
+                headers = _with_trace_headers(headers)
                 try:
                     resp = await client.request(request.method, target, content=body, headers=headers)
                     _record_cb("automation", resp.status_code < 500)
