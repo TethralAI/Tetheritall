@@ -8,6 +8,8 @@ from fastapi.security import APIKeyHeader
 import time
 import yaml
 from pydantic import BaseModel
+from starlette_exporter import PrometheusMiddleware, handle_metrics
+from fastapi.middleware.cors import CORSMiddleware
 
 from agents.coordinator import CoordinatorAgent, CoordinatorConfig
 from config.policy import ConsentPolicy
@@ -34,6 +36,75 @@ from adapters import usgs as usgs_adapter, nws as nws_adapter
 from tools.importers import home_assistant as ha_importer
 from tools.hubs import hubitat as hubitat_tools
 from tools.wearables import oura as oura_tools, terra as terra_tools
+import httpx
+from api.smartthings_webhook import router as st_events_router
+from api.smartthings_subscriptions import router as st_sub_router
+from storage.twins import store as twin_store
+from tools.llm.guard import LLMGuard
+from tools.energy.ocpi_client import OCPIClient
+from api.middleware import request_id_and_logging_middleware
+from tools.events.bus import bus
+
+# Optional OpenTelemetry setup
+try:
+    import os
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as OTLPHTTPExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+except Exception:
+    trace = None  # type: ignore
+
+try:
+    from prometheus_client import Histogram
+except Exception:
+    Histogram = None  # type: ignore
+
+_request_hist = None
+if Histogram is not None:
+    _request_hist = Histogram(
+        "api_request_duration_seconds",
+        "API request duration",
+        labelnames=("method", "path", "status"),
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+
+def _current_trace_id() -> Optional[str]:
+    try:
+        if trace is None:
+            return None
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if not ctx or not ctx.trace_id:
+            return None
+        return f"{ctx.trace_id:032x}"
+    except Exception:
+        return None
+
+
+def _init_tracing(service_name: str) -> None:
+    if trace is None:
+        return
+    try:
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "http://localhost:4318"
+        resource = Resource.create({"service.name": service_name})
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPHTTPExporter(endpoint=f"{endpoint}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        # Instrumentations
+        FastAPIInstrumentor.instrument()
+        HTTPXClientInstrumentor().instrument()
+        SQLAlchemyInstrumentor().instrument()
+        RedisInstrumentor().instrument()
+    except Exception:
+        pass
 
 
 class ScanRequest(BaseModel):
@@ -46,8 +117,44 @@ class ScanRequest(BaseModel):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
+    # CORS allowlist
+    allow = [o.strip() for o in (settings.outbound_allowlist or "").split(",") if o.strip()]
+    if allow:
+        app.add_middleware(CORSMiddleware, allow_origins=allow, allow_methods=["*"], allow_headers=["*"])
+    # Security headers
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
+    app.middleware("http")(request_id_and_logging_middleware)
+    app.add_middleware(PrometheusMiddleware)
+    app.add_route("/metrics", handle_metrics)
+
+    # Request timing middleware with exemplars
+    if _request_hist is not None:
+        @app.middleware("http")
+        async def _metrics_timing(request: Request, call_next):
+            start = time.time()
+            resp = await call_next(request)
+            dur = time.time() - start
+            labels = (request.method, request.url.path, str(getattr(resp, "status_code", 200)))
+            if _request_hist is not None:
+                ex = {}
+                tid = _current_trace_id()
+                if tid:
+                    ex = {"trace_id": tid}
+                try:
+                    _request_hist.labels(*labels).observe(dur, exemplar=ex or None)  # type: ignore[arg-type]
+                except Exception:
+                    _request_hist.labels(*labels).observe(dur)
+            return resp
+
     coordinator = CoordinatorAgent(CoordinatorConfig())
     engine = AutomationEngine()
+    llm_guard = LLMGuard()
 
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -84,6 +191,12 @@ def create_app() -> FastAPI:
         await engine.stop()
 
     app.include_router(alexa_router)
+    app.include_router(st_events_router)
+    app.include_router(st_sub_router)
+
+    @app.get("/events/health")
+    async def events_health() -> Dict[str, Any]:
+        return bus.health()
 
     @app.post("/scan/device", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:
@@ -138,6 +251,10 @@ def create_app() -> FastAPI:
     # New capability endpoints (non-breaking; additive)
     @app.post("/capability/{provider}/{external_id}/switch/on", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_switch_on(provider: str, external_id: str) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/switch/on")
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -145,6 +262,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/switch/off", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_switch_off(provider: str, external_id: str) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/switch/off")
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.SWITCHABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -155,6 +276,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/dimmer/set", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_dimmer_set(provider: str, external_id: str, body: DimmerBody) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/dimmer/set", json={"level": body.level})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.DIMMABLE)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -170,6 +295,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/color/hsv", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_color_hsv(provider: str, external_id: str, body: ColorHSV) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/color/hsv", json={"h": body.h, "s": body.s, "v": body.v})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -177,6 +306,10 @@ def create_app() -> FastAPI:
 
     @app.post("/capability/{provider}/{external_id}/color/temp", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def capability_color_temp(provider: str, external_id: str, body: ColorTemp) -> Dict[str, Any]:
+        if settings.proxy_capabilities_via_integrations and settings.integrations_base_url:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+                r = await client.post(f"{settings.integrations_base_url}/capability/{provider}/{external_id}/color/temp", json={"mireds": body.mireds})
+                return r.json() if r.status_code < 500 else {"error": r.text}
         adapter = capability_registry.get(provider, CapabilityType.COLOR_CONTROL)
         if not adapter:
             raise HTTPException(status_code=404, detail="capability adapter not found")
@@ -358,12 +491,20 @@ def create_app() -> FastAPI:
 
     # LLM routine generator (fallback heuristic if no key)
     @app.post("/automation/routines/generate_llm", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def generate_routine_llm(body: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_routine_llm(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
         # Fallback: return a trivial rule heuristic regardless of key presence
-        text = str((body or {}).get("prompt") or "").lower()
+        org_id = request.headers.get(settings.org_id_header, "default")
+        prompt_raw = str((body or {}).get("prompt") or "")
+        prompt = llm_guard.pii_scrub(prompt_raw)
+        # Budget check (assume cost proportional to length)
+        cost = max(1, len(prompt) // 50)
+        if not llm_guard.check_and_consume(org_id, cost):
+            raise HTTPException(status_code=402, detail="LLM budget exceeded")
+        text = prompt.lower()
         action: Dict[str, Any] = {"type": "switch", "service": "on" if "on" in text else "off"}
         rule = {"id": "generated", "trigger": {"type": "time"}, "conditions": [], "actions": [action]}
-        return {"rule": rule}
+        llm_guard.log_audit(org_id, {"ts": int(time.time()), "prompt_len": len(prompt_raw), "cost": cost, "rule": rule})
+        return {"rule": rule, "deterministic": settings.llm_deterministic}
 
     # Importers: Home Assistant manifest
     @app.get("/importers/home_assistant/manifest", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
@@ -389,107 +530,203 @@ def create_app() -> FastAPI:
             return {"error": "missing api key"}
         return await asyncio.to_thread(terra_tools.daily_summary, api_key, user_id)
 
-    # Home Assistant local
+    # UI schema and mapping suggestion endpoints (in-memory/Redis only)
+    @app.get("/ui/device/{provider}/{external_id}", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def ui_schema(provider: str, external_id: str) -> Dict[str, Any]:
+        twin = twin_store.get(provider, external_id)
+        if not twin:
+            raise HTTPException(status_code=404, detail="device not found")
+        # Grouped by capability with simple control templates
+        caps = set(twin.get("capabilities", []) or [])
+        groups: Dict[str, Any] = {}
+        if any(c in caps for c in ("switch", "light")):
+            groups["switchable"] = {
+                "controls": [
+                    {
+                        "type": "toggle",
+                        "action": {"capability": "switch"},
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/on"},
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/switch/off"}
+                        ]
+                    }
+                ]
+            }
+        if any(c in caps for c in ("switchLevel", "dimmer")):
+            groups["dimmable"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "min": 0,
+                        "max": 100,
+                        "action": {"capability": "dimmer"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/dimmer/set",
+                                "body": {"level": "<0-100>"}
+                            }
+                        ]
+                    }
+                ]
+            }
+        if any(c in caps for c in ("colorControl", "colorTemperature")):
+            groups["color"] = {
+                "controls": [
+                    {
+                        "type": "color",
+                        "action": {"capability": "colorControl"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/hsv",
+                                "body": {"h": "<0-360>", "s": "<0-100>", "v": "<0-100>"}
+                            }
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "min": 153,
+                        "max": 500,
+                        "action": {"capability": "colorTemperature"},
+                        "actions": [
+                            {
+                                "method": "POST",
+                                "path": f"/capability/{provider}/{external_id}/color/temp",
+                                "body": {"mireds": "<153-500>"}
+                            }
+                        ]
+                    }
+                ]
+            }
+        # Thermostat (best-effort templates)
+        if any(c in caps for c in ("thermostat", "temperature", "thermostatMode", "coolingSetpoint", "heatingSetpoint")):
+            groups["thermostat"] = {
+                "controls": [
+                    {
+                        "type": "select",
+                        "id": "hvac_mode",
+                        "label": "Mode",
+                        "options": ["off", "heat", "cool", "auto"],
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/mode", "body": {"mode": "<off|heat|cool|auto>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "cool_setpoint",
+                        "label": "Cool to",
+                        "min": 16,
+                        "max": 30,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/cooling_setpoint", "body": {"celsius": "<16-30>"}}
+                        ]
+                    },
+                    {
+                        "type": "slider",
+                        "id": "heat_setpoint",
+                        "label": "Heat to",
+                        "min": 10,
+                        "max": 25,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/thermostat/heating_setpoint", "body": {"celsius": "<10-25>"}}
+                        ]
+                    }
+                ]
+            }
+        # Cover
+        if any(c in caps for c in ("cover", "windowShade", "position")):
+            groups["cover"] = {
+                "controls": [
+                    {"type": "button", "id": "open", "label": "Open", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/open"}]},
+                    {"type": "button", "id": "close", "label": "Close", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/close"}]},
+                    {
+                        "type": "slider",
+                        "id": "position",
+                        "label": "Position",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/cover/position", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Fan
+        if any(c in caps for c in ("fan", "fanSpeed", "fanControl")):
+            groups["fan"] = {
+                "controls": [
+                    {
+                        "type": "slider",
+                        "id": "speed",
+                        "label": "Speed",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/fan/speed", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        # Media
+        if any(c in caps for c in ("media", "mediaPlayback", "audioVolume")):
+            groups["media"] = {
+                "controls": [
+                    {"type": "button", "id": "play", "label": "Play", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/play"}]},
+                    {"type": "button", "id": "pause", "label": "Pause", "actions": [{"method": "POST", "path": f"/capability/{provider}/{external_id}/media/pause"}]},
+                    {
+                        "type": "slider",
+                        "id": "volume",
+                        "label": "Volume",
+                        "min": 0,
+                        "max": 100,
+                        "actions": [
+                            {"method": "POST", "path": f"/capability/{provider}/{external_id}/media/volume", "body": {"percent": "<0-100>"}}
+                        ]
+                    }
+                ]
+            }
+        return {"provider": provider, "external_id": external_id, "name": twin.get("name"), "groups": groups}
+
+    # Mapping suggestions store (signal-based, no persistence beyond Redis/memory)
+    @app.post("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def add_mapping_suggestions(body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                rds.set(key, _j.dumps(body))
+            else:
+                app.state.mapping_suggestions = body
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @app.get("/mapping/suggestions", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
+    async def get_mapping_suggestions() -> Dict[str, Any]:
+        try:
+            import json as _j
+            key = "mapping:suggestions"
+            if settings.redis_url:
+                import redis  # type: ignore
+                rds = redis.Redis.from_url(settings.redis_url)
+                v = rds.get(key)
+                data = _j.loads(v) if v else {}
+            else:
+                data = getattr(app.state, "mapping_suggestions", {})
+            return {"suggestions": data}
+        except Exception as exc:
+            return {"suggestions": {}, "error": str(exc)}
+
+    # Home Assistant local (re-added after extended endpoints)
     @app.get("/integrations/home_assistant/entities", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def home_assistant_entities() -> Dict[str, Any]:
         if not (settings.home_assistant_base_url and settings.home_assistant_token):
             return {"count": 0, "entities": []}
         items = await asyncio.to_thread(ha_list, settings.home_assistant_base_url, settings.home_assistant_token)
         return {"count": len(items), "entities": items}
-
-    class HACallIn(BaseModel):
-        domain: str
-        service: str
-        payload: Dict[str, Any]
-
-    @app.post("/integrations/home_assistant/call", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def home_assistant_call(body: HACallIn) -> Dict[str, Any]:
-        if not (settings.home_assistant_base_url and settings.home_assistant_token):
-            return {"ok": False, "error": "missing HA config"}
-        return await asyncio.to_thread(ha_call, settings.home_assistant_base_url, settings.home_assistant_token, body.domain, body.service, body.payload)
-
-    # Google Nest SDM (placeholder; requires full setup)
-    @app.get("/integrations/google/nest/devices", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def google_nest_devices() -> Dict[str, Any]:
-        token = settings.google_nest_access_token or ""
-        items = await asyncio.to_thread(nest_list, token) if token else []
-        return {"count": len(items), "devices": items}
-
-    # Hue Remote API (placeholder)
-    @app.get("/integrations/hue/remote/resources", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def hue_remote_resources() -> Dict[str, Any]:
-        token = settings.hue_remote_token or ""
-        items = await asyncio.to_thread(hue_list, token) if token else []
-        return {"count": len(items), "resources": items}
-
-    # SmartThings OAuth helper endpoints
-    @app.get("/integrations/smartthings/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def smartthings_oauth_url() -> Dict[str, Any]:
-        if not (settings.smartthings_client_id and settings.smartthings_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing client_id/redirect_uri")
-        return {"url": st_auth_url(settings.smartthings_client_id, settings.smartthings_redirect_uri)}
-
-    class STOAuthCode(BaseModel):
-        code: str
-
-    @app.post("/integrations/smartthings/oauth/exchange", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def smartthings_oauth_exchange(body: STOAuthCode) -> Dict[str, Any]:
-        if not (settings.smartthings_client_id and settings.smartthings_client_secret and settings.smartthings_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing oauth settings")
-        data = await asyncio.to_thread(
-            st_exchange, settings.smartthings_client_id, settings.smartthings_client_secret, settings.smartthings_redirect_uri, body.code
-        )
-        return data
-
-    # Tuya OAuth helper URL (placeholder)
-    @app.get("/integrations/tuya/oauth/url", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def tuya_oauth_url(region: str = "us") -> Dict[str, Any]:
-        if not (settings.tuya_client_id and settings.tuya_redirect_uri):
-            raise HTTPException(status_code=400, detail="missing tuya client_id/redirect_uri")
-        return {"url": tuya_auth_url(settings.tuya_client_id, settings.tuya_redirect_uri, region)}
-
-    # openHAB local
-    @app.get("/integrations/openhab/items", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def openhab_items() -> Dict[str, Any]:
-        if not settings.openhab_base_url:
-            return {"count": 0, "items": []}
-        items = await asyncio.to_thread(oh_list, settings.openhab_base_url, settings.openhab_token)
-        return {"count": len(items), "items": items}
-
-    class OHCommandIn(BaseModel):
-        item: str
-        command: str
-
-    @app.post("/integrations/openhab/command", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def openhab_command(body: OHCommandIn) -> Dict[str, Any]:
-        if not settings.openhab_base_url:
-            return {"ok": False, "error": "missing openhab base url"}
-        return await asyncio.to_thread(oh_cmd, settings.openhab_base_url, body.item, body.command, settings.openhab_token)
-
-    # Z-Wave JS WS
-    @app.get("/integrations/zwave_js/version", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_version() -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_version(settings.zwave_js_url)
-
-    @app.get("/integrations/zwave_js/nodes", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_nodes() -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_nodes(settings.zwave_js_url)
-
-    class ZWSetIn(BaseModel):
-        node_id: int
-        value_id: Dict[str, Any]
-        value: Any
-
-    @app.post("/integrations/zwave_js/set_value", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
-    async def zwave_js_set_value(body: ZWSetIn) -> Dict[str, Any]:
-        if not settings.zwave_js_url:
-            return {"ok": False, "error": "missing zwave_js_url"}
-        return await zwjs_set_value(settings.zwave_js_url, body.node_id, body.value_id, body.value)
-
 
     return app
 

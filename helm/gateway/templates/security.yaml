@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: PodSecurityContext
+    metadata:
+      name: gateway-psc
+    runAsNonRoot: true
+    runAsUser: 10001
+    fsGroup: 10001
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: gateway-egress-allow
+    spec:
+      podSelector:
+        matchLabels:
+          app: gateway
+      policyTypes:
+        - Egress
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app: integrations
