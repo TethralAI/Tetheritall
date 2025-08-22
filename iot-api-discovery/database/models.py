@@ -116,4 +116,49 @@ class DeviceTwin(Base):
     state = Column(Text, nullable=True)  # JSON state snapshot
     capabilities = Column(Text, nullable=True)  # JSON array of capability names
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    version = Column(Integer, default=1, nullable=False)
+
+
+class DeviceTwinVersion(Base):
+    __tablename__ = "device_twins_versions"
+
+    id = Column(Integer, primary_key=True)
+    twin_id = Column(Integer, ForeignKey("device_twins.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    diff = Column(Text, nullable=True)  # JSON diff (optional)
+    full = Column(Text, nullable=False)  # JSON full document
+    event_id = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Mapping(Base):
+    __tablename__ = "mappings"
+
+    id = Column(Integer, primary_key=True)
+    source_provider = Column(String(64), nullable=False, index=True)
+    source_external_id = Column(String(255), nullable=False, index=True)
+    target_provider = Column(String(64), nullable=False, index=True)
+    target_external_id = Column(String(255), nullable=False, index=True)
+    confidence = Column(Float, default=0.0, nullable=False)
+    status = Column(String(32), default="proposed", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(64), nullable=False, index=True)
+    payload = Column(Text, nullable=False)  # JSON
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class Outbox(Base):
+    __tablename__ = "outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic = Column(String(255), nullable=False)
+    payload = Column(Text, nullable=False)  # JSON
+    available_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
 
