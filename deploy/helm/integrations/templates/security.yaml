@@ -1,31 +1,21 @@
-apiVersion: v1
-kind: List
-items:
-  - apiVersion: v1
-    kind: PodSecurityContext
-    metadata:
-      name: integrations-psc
-    runAsNonRoot: true
-    runAsUser: 10001
-    fsGroup: 10001
-  - apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    metadata:
-      name: integrations-allow-api
-    spec:
-      podSelector:
-        matchLabels:
-          app: integrations
-      policyTypes:
-        - Ingress
-        - Egress
-      ingress:
-        - from:
-            - podSelector:
-                matchLabels:
-                  app: api
-      egress:
-        - to:
-            - podSelector:
-                matchLabels:
-                  app: redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: integrations-allow-api
+spec:
+  podSelector:
+    matchLabels:
+      app: integrations
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
