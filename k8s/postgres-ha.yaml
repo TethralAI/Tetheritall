@@ -40,6 +40,21 @@ spec:
             - {name: PATRONI_SUPERUSER_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superuser, key: password}}}
             - {name: PATRONI_REPLICATION_USERNAME, value: replicator}
             - {name: PATRONI_REPLICATION_PASSWORD, valueFrom: {secretKeyRef: {name: pg-repl, key: password}}}
+            - name: PATRONI_POSTGRESQL_PARAMETERS
+              value: |
+                archive_mode: 'on'
+                wal_level: 'replica'
+                max_wal_senders: 10
+                archive_timeout: 60
+                archive_command: 'sh -c "command -v wal-g >/dev/null 2>&1 && wal-g wal-push %p || true"'
+            - name: WALG_S3_PREFIX
+              value: "s3://$(S3_BUCKET)/pg"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: pg-backup-secrets, key: AWS_ACCESS_KEY_ID}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: pg-backup-secrets, key: AWS_SECRET_ACCESS_KEY}
           ports:
             - {name: postgres, containerPort: 5432}
             - {name: patroni, containerPort: 8008}
