@@ -25,7 +25,6 @@ async def process_event(event: Dict[str, Any]) -> None:
         payload = {}
 
     with session_scope(SessionFactory) as session:
-        # Persist audit for visibility
         session.add(AuditEvent(kind=f"event:{topic}", payload=json.dumps(payload)))
 
         if topic == "smartthings.device_event":
@@ -35,7 +34,6 @@ async def process_event(event: Dict[str, Any]) -> None:
             value = payload.get("value")
             if not device_id:
                 return
-            # Upsert DeviceTwin
             twin = (
                 session.query(DeviceTwin)
                 .filter(DeviceTwin.provider == "smartthings", DeviceTwin.external_id == device_id)
@@ -76,7 +74,6 @@ async def process_event(event: Dict[str, Any]) -> None:
                     )
                 )
             else:
-                # increment version and update
                 twin.version = (twin.version or 0) + 1
                 twin.name = display_name or twin.name
                 twin.state = state_json
@@ -95,7 +92,6 @@ async def process_event(event: Dict[str, Any]) -> None:
 
 async def outbox_publisher_loop() -> None:
     while True:
-        # Pull a small batch of available outbox rows and publish
         with session_scope(SessionFactory) as session:
             from datetime import datetime
 
@@ -111,22 +107,28 @@ async def outbox_publisher_loop() -> None:
                 except Exception:
                     payload = {}
                 published_id = bus.publish(row.topic, payload or {})
-                # Mark attempt and schedule retry backoff if needed
                 row.attempts = (row.attempts or 0) + 1
                 row.available_at = datetime.utcnow()
-                # Poison-pill: drop after 10 attempts
                 if (row.attempts or 0) >= 10:
                     session.delete(row)
                     continue
-                # Simple policy: delete on publish success; keep for retry if None
                 if published_id:
                     session.delete(row)
         await asyncio.sleep(1.0)
 
 
 async def run_worker() -> None:
+    # Start NATS subscription if using NATS
+    if settings.event_bus_backend.lower() == "nats":
+        async def _handle(subject: str, data: Dict[str, Any]) -> None:
+            await process_event({"topic": subject, "payload": data})
+        await bus.subscribe_nats("smartthings.device_event", _handle)
+        # Keep running loops
+        while True:
+            await asyncio.sleep(1.0)
+
+    # Else Redis consumer
     bus.ensure_consumer_group(GROUP)
-    # Run consumer and outbox publisher concurrently
     async def consume_loop() -> None:
         while True:
             entries = bus.read_group(GROUP, CONSUMER, count=10, block_ms=1000)
@@ -136,7 +138,6 @@ async def run_worker() -> None:
                     await process_event(event)
                     bus.ack(GROUP, entry_id)
                 except Exception as exc:
-                    # Leave unacked for redelivery; if Redis backend, rely on PEL retry; future: move to DLQ stream
                     pass
             await asyncio.sleep(0.1)
 

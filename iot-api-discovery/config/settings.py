@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     mtls_client_cert_path: str | None = None
     mtls_client_key_path: str | None = None
     # Event bus configuration
-    event_bus_backend: str = Field(default="redis")  # redis|nats|kafka
+    event_bus_backend: str = Field(default="nats")  # redis|nats|kafka
     nats_url: str | None = None  # e.g., nats://nats:4222
     nats_stream: str | None = None  # optional JetStream stream name
     kafka_bootstrap_servers: str | None = None  # e.g., kafka:9092
