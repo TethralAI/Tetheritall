@@ -1,4 +1,6 @@
 image: ghcr.io/tethralai/tetheritall-gateway:latest
+imageDigest: ""
+imagePullPolicy: IfNotPresent
 replicaCount: 2
 env:
   API_TOKEN: "change-me"
@@ -9,6 +11,7 @@ service:
 podAnnotations:
   prometheus.io/scrape: "true"
   prometheus.io/port: "8001"
+serviceAccountName: gateway-sa
 resources:
   requests:
     cpu: 100m
