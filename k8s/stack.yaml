@@ -20,7 +20,8 @@ spec:
           env:
             - {name: REDIS_URL, value: redis://redis:6379/0}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
-            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: pg-backup-secrets, key: PGDATABASE}}}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: app-db-url, key: DATABASE_URL}}
           ports: [{containerPort: 8000}]
 ---
 apiVersion: v1
@@ -50,7 +51,8 @@ spec:
           env:
             - {name: REDIS_URL, value: redis://redis:6379/0}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
-            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: pg-backup-secrets, key: PGDATABASE}}}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: app-db-url, key: DATABASE_URL}}
           ports: [{containerPort: 8100}]
 ---
 apiVersion: v1
@@ -134,7 +136,8 @@ spec:
           command: ["python", "-m", "tools.events.worker"]
           env:
             - {name: REDIS_URL, value: redis://redis:6379/0}
-            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: pg-backup-secrets, key: PGDATABASE}}}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: app-db-url, key: DATABASE_URL}}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
           resources:
             requests: {cpu: "100m", memory: "128Mi"}
