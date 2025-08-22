@@ -2,6 +2,9 @@
 
 Orchestration app for IoT discovery, integrations, and API gateway.
 
+Source of truth for Kubernetes manifests is the Helm umbrella chart under `deploy/helm/umbrella`.
+Legacy raw manifests and Kustomize overlays are archived under `deploy/infra/`.
+
 Quickstart:
 
 - Local: `make up` (uses `deploy/compose/docker-compose.yml`).
