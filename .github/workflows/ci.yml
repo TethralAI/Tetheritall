@@ -1,0 +1,158 @@
+name: CI
+on:
+  push:
+    branches: [ feature/iot-orchestrator ]
+  pull_request:
+    branches: [ feature/iot-orchestrator ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r iot-api-discovery/requirements.txt
+      - name: Run tests
+        run: |
+          python -m pytest -q iot-api-discovery/tests
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check iot-api-discovery
+  alembic-drift:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r iot-api-discovery/requirements.txt
+      - name: Alembic revision --autogenerate check (no changes expected)
+        working-directory: iot-api-discovery
+        run: |
+          alembic revision --autogenerate -m "drift-check" || true
+          if git status --porcelain | grep alembic/versions/; then
+            echo "Alembic drift detected: please generate and commit migrations";
+            git --no-pager diff -- alembic/versions | cat;
+            exit 1;
+          fi
+  pact-contracts:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r iot-api-discovery/requirements.txt
+      - name: Run Pact tests
+        working-directory: iot-api-discovery
+        run: |
+          python - <<'PY'
+          from pact import Consumer, Provider
+          from urllib.request import Request, urlopen
+          import json
+
+          pact = Consumer('gateway').has_pact_with(Provider('integrations'), port=8999)
+          pact.start_service()
+
+          # Health
+          expected_health = {'ok': True}
+          (pact
+            .given('integrations is healthy')
+            .upon_receiving('a health check')
+            .with_request('get', '/health')
+            .will_respond_with(200, body=expected_health))
+
+          # Switch ON
+          (pact
+            .given('device abc exists')
+            .upon_receiving('switch on command')
+            .with_request('post', '/capability/smartthings/abc/switch/on')
+            .will_respond_with(200, body={'ok': True}))
+
+          # Dimmer set
+          body = {'level': 50}
+          (pact
+            .given('device abc supports dimmer')
+            .upon_receiving('dimmer set command')
+            .with_request('post', '/capability/smartthings/abc/dimmer/set', body=body)
+            .will_respond_with(200, body={'ok': True}))
+
+          with pact:
+            # health
+            req = Request('http://localhost:8999/health')
+            resp = urlopen(req)
+            assert resp.getcode() == 200
+            # switch on
+            req2 = Request('http://localhost:8999/capability/smartthings/abc/switch/on', method='POST')
+            resp2 = urlopen(req2)
+            assert resp2.getcode() == 200
+            # dimmer set
+            data = json.dumps({'level': 50}).encode()
+            req3 = Request('http://localhost:8999/capability/smartthings/abc/dimmer/set', data=data, method='POST')
+            req3.add_header('content-type', 'application/json')
+            resp3 = urlopen(req3)
+            assert resp3.getcode() == 200
+
+          pact.stop_service()
+          PY
+  docker:
+    needs: [test, alembic-drift, pact-contracts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: meta
+        run: |
+          echo "sha=sha-${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+      - name: Build images
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }} iot-api-discovery
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+          docker build -t ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }} -f iot-api-discovery/Dockerfile iot-api-discovery
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.tag }}
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.tag }}
+          docker tag ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }} ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.tag }}
+      - name: Generate SBOM (optional)
+        if: ${{ always() }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}
+      - name: Push images
+        run: |
+          docker push ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.sha }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.tag }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-integrations:${{ steps.meta.outputs.tag }}
+          docker push ghcr.io/${{ github.repository }}/tetheritall-gateway:${{ steps.meta.outputs.tag }}
+      - name: Cosign sign (optional)
+        if: ${{ secrets.COSIGN_KEY != '' }}
+        uses: sigstore/cosign-installer@v3.5.0
+      - name: Cosign sign images
+        if: ${{ secrets.COSIGN_KEY != '' }}
+        run: |
+          echo "${{ secrets.COSIGN_KEY }}" > cosign.key
+          COSIGN_PASSWORD=${{ secrets.COSIGN_PASSWORD }} cosign sign --key cosign.key ghcr.io/${{ github.repository }}/tetheritall-api:${{ steps.meta.outputs.sha }}
