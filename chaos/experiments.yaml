@@ -1,0 +1,35 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: redis-network-delay
+  namespace: iot
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: ["iot"]
+    labelSelectors: {"app": "redis"}
+  delay:
+    latency: "200ms"
+    correlation: "25"
+    jitter: "100ms"
+  duration: "10m"
+  direction: to
+  target:
+    selector:
+      namespaces: ["iot"]
+      labelSelectors: {}
+    mode: all
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: gateway-pod-kill
+  namespace: iot
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: ["iot"]
+    labelSelectors: {"app": "gateway"}
+  duration: "5m"
