@@ -5,12 +5,13 @@ import os
 import time
 import json
 import secrets
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
 import jwt
+from jsonschema import validate as jsonschema_validate, ValidationError
 
 
 def parse_allowlist(env_val: str | None) -> set[str]:
@@ -50,6 +51,8 @@ def create_app() -> FastAPI:
     CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "60"))
     # Idempotency
     IDEMP_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "3600"))
+    # Schema registry
+    SCHEMA_FILE = os.getenv("GATEWAY_SCHEMA_FILE")
 
     # Simple in-memory RL fallback
     app.state.rate_store = {}
@@ -74,6 +77,27 @@ def create_app() -> FastAPI:
         app.state.redis = None
 
     app.state.jwks = {"fetched": 0, "keys": {}}
+    app.state.schemas = []
+
+    # Load schema registry (optional). Format: [{"path_prefix": "/capability/smartthings", "request_schema": {...}, "response_schema": {...}}]
+    if SCHEMA_FILE and os.path.exists(SCHEMA_FILE):
+        try:
+            with open(SCHEMA_FILE, "r") as f:
+                app.state.schemas = json.load(f)
+        except Exception:
+            app.state.schemas = []
+
+    def _match_schema(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        for entry in app.state.schemas or []:
+            prefix = entry.get("path_prefix", "")
+            if prefix and path.startswith(prefix):
+                return entry.get("request_schema"), entry.get("response_schema")
+        return None, None
+
+    # Versioned OpenAPI
+    @app.get("/openapi/v1.json")
+    async def openapi_v1() -> Any:
+        return app.openapi()
 
     def is_allowed_host(url: str) -> bool:
         if not OUTBOUND_ALLOWLIST:
@@ -108,7 +132,6 @@ def create_app() -> FastAPI:
         k = app.state.jwks.get("keys", {}).get(kid)
         if not k:
             return None
-        # For PyJWT, use the public key in PEM if provided; otherwise, construct from components is nontrivial; fallback to jwk
         try:
             return jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(k))
         except Exception:
@@ -228,6 +251,13 @@ def create_app() -> FastAPI:
                     raise
                 except Exception:
                     raise HTTPException(status_code=400, detail="invalid json")
+            # Schema validation
+            req_schema, _ = _match_schema(request.url.path)
+            if req_schema and request.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    jsonschema_validate(instance=json.loads(body or b"{}"), schema=req_schema)
+                except ValidationError as ve:
+                    raise HTTPException(status_code=422, detail=f"schema validation failed: {ve.message}")
             return body
         return await request.body()
 
@@ -305,6 +335,15 @@ def create_app() -> FastAPI:
         out["traceparent"] = trace
         return out
 
+    def _validate_response_schema(path: str, data: Any) -> None:
+        _, resp_schema = _match_schema(path)
+        if resp_schema:
+            try:
+                jsonschema_validate(instance=data, schema=resp_schema)
+            except ValidationError as ve:
+                # Do not fail response by default; could switch to strict mode later
+                pass
+
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -329,6 +368,7 @@ def create_app() -> FastAPI:
                     data = resp.json()
                 except Exception:
                     data = resp.text
+                _validate_response_schema(request.url.path, data if isinstance(data, dict) else {"data": data})
                 return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
 
         if request.method == "GET" and _cacheable(request.url.path):
@@ -361,6 +401,7 @@ def create_app() -> FastAPI:
                     data = resp.json()
                 except Exception:
                     data = resp.text
+                _validate_response_schema(request.url.path, data if isinstance(data, dict) else {"data": data})
                 return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
 
         if request.method == "GET" and _cacheable(request.url.path):

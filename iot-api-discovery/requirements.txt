@@ -30,3 +30,5 @@ redis>=5.0.7
 prometheus-client>=0.20.0
 starlette-exporter>=0.18.0
 cryptography>=43.0.1
+jsonschema>=4.23.0
+pact-python>=3.2.0
