@@ -58,12 +58,22 @@ def _seen(event_id: str, ttl: int = 300) -> bool:
     return False
 
 
+def _dlq_push(item: Dict[str, Any]) -> None:
+    try:
+        if _rds:
+            import json as _j
+            _rds.lpush("st:dlq", _j.dumps(item))
+            _rds.ltrim("st:dlq", 0, 999)
+    except Exception:
+        pass
+
+
 @router.post("/integrations/smartthings/webhook")
 async def smartthings_webhook(request: Request) -> Dict[str, Any]:
     # SmartThings app verification and event delivery
-    body = await request.body()
+    raw = await request.body()
     sig = request.headers.get("X-ST-Signature", "")
-    if settings.smartthings_client_secret and not _verify_signature(settings.smartthings_client_secret, body, sig):
+    if settings.smartthings_client_secret and not _verify_signature(settings.smartthings_client_secret, raw, sig):
         raise HTTPException(status_code=401, detail="invalid signature")
 
     payload = await request.json()
@@ -75,17 +85,20 @@ async def smartthings_webhook(request: Request) -> Dict[str, Any]:
     # Event handling
     events: List[Dict[str, Any]] = (payload.get("eventData") or {}).get("events", [])
     for e in events:
-        dev = e.get("deviceEvent") or {}
-        if _seen(dev.get("eventId", "")):
-            continue
-        device_id = dev.get("deviceId")
-        name = dev.get("displayName")
-        capability = dev.get("capability")
-        value = dev.get("value")
-        if device_id:
-            # Upsert minimal twin
-            caps = [capability] if capability else []
-            state = {capability: value} if capability else {}
-            twin_store.upsert("smartthings", device_id, name, caps, state)
+        try:
+            dev = e.get("deviceEvent") or {}
+            if _seen(dev.get("eventId", "")):
+                continue
+            device_id = dev.get("deviceId")
+            name = dev.get("displayName")
+            capability = dev.get("capability")
+            value = dev.get("value")
+            if device_id:
+                # Upsert minimal twin
+                caps = [capability] if capability else []
+                state = {capability: value} if capability else {}
+                twin_store.upsert("smartthings", device_id, name, caps, state)
+        except Exception as exc:
+            _dlq_push({"error": str(exc), "event": e})
     return {"ok": True}
 

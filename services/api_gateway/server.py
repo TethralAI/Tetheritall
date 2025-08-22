@@ -44,6 +44,8 @@ def create_app() -> FastAPI:
     # Caching
     CACHE_PREFIXES = [p.strip() for p in (os.getenv("CACHE_GET_PREFIXES") or "").split(",") if p.strip()]
     CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "60"))
+    # Idempotency
+    IDEMP_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "3600"))
 
     # Simple in-memory RL fallback
     app.state.rate_store = {}
@@ -87,6 +89,32 @@ def create_app() -> FastAPI:
             raise
         except Exception:
             raise HTTPException(status_code=401, detail="invalid token")
+
+    def _idempotency_key(path: str, key: str) -> str:
+        return f"idem:{path}:{key}"
+
+    async def _get_idempotent_response(path: str, key: str) -> JSONResponse | None:
+        if not app.state.redis or not key:
+            return None
+        try:
+            import json as _j
+            val = app.state.redis.get(_idempotency_key(path, key))
+            if val:
+                data = _j.loads(val)
+                return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
+        except Exception:
+            return None
+        return None
+
+    def _store_idempotent_response(path: str, key: str, response: JSONResponse) -> None:
+        if not app.state.redis or not key:
+            return
+        try:
+            import json as _j
+            payload = {"status": response.status_code, "body": getattr(response, "body", b"").decode() if hasattr(response, "body") else response.body}
+            app.state.redis.setex(_idempotency_key(path, key), IDEMP_TTL, _j.dumps(payload))
+        except Exception:
+            pass
 
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
@@ -206,6 +234,17 @@ def create_app() -> FastAPI:
             pass
         return resp
 
+    async def _idempotent_post(path: str, request: Request, perform_request):
+        key = request.headers.get("Idempotency-Key", "").strip()
+        if key:
+            cached = await _get_idempotent_response(path, key)
+            if cached:
+                return cached
+        resp = await perform_request()
+        if key and getattr(resp, "status_code", 200) < 500:
+            _store_idempotent_response(path, key, resp)
+        return resp
+
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -233,6 +272,8 @@ def create_app() -> FastAPI:
 
         if request.method == "GET" and _cacheable(request.url.path):
             return await _maybe_cache_get(request.url.path, _do)
+        if request.method == "POST":
+            return await _idempotent_post(request.url.path, request, _do)
         return await _do()
 
     @app.api_route("/proxy/automation/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -262,6 +303,8 @@ def create_app() -> FastAPI:
 
         if request.method == "GET" and _cacheable(request.url.path):
             return await _maybe_cache_get(request.url.path, _do)
+        if request.method == "POST":
+            return await _idempotent_post(request.url.path, request, _do)
         return await _do()
 
     return app
