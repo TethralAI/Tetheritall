@@ -1,4 +1,6 @@
 image: ghcr.io/tethralai/tetheritall-integrations:latest
+imageDigest: ""
+imagePullPolicy: IfNotPresent
 replicaCount: 2
 env:
   REDIS_URL: redis://redis:6379/0
@@ -7,6 +9,7 @@ service:
 podAnnotations:
   prometheus.io/scrape: "true"
   prometheus.io/port: "8100"
+serviceAccountName: integrations-sa
 resources:
   requests:
     cpu: 100m

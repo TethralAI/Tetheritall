@@ -4,6 +4,20 @@ global:
   redisUrl: redis://redis:6379/0
   otelExporter: http://otel-collector.iot.svc.cluster.local:4318
 
+externalSecrets:
+  enabled: true
+  secretStore: eso
+  gateway:
+    apiToken:
+      key: gateway/api_token
+    jwtSecret:
+      key: gateway/jwt_secret
+    jwksUrl:
+      key: gateway/jwks_url
+  database:
+    url:
+      key: app/DATABASE_URL
+
 api:
   env:
     REDIS_URL: redis://redis:6379/0
