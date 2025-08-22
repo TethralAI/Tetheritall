@@ -41,6 +41,9 @@ def create_app() -> FastAPI:
     MTLS_CA = os.getenv("MTLS_CA_PATH")
     MTLS_CERT = os.getenv("MTLS_CLIENT_CERT_PATH")
     MTLS_KEY = os.getenv("MTLS_CLIENT_KEY_PATH")
+    # Caching
+    CACHE_PREFIXES = [p.strip() for p in (os.getenv("CACHE_GET_PREFIXES") or "").split(",") if p.strip()]
+    CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "60"))
 
     # Simple in-memory RL fallback
     app.state.rate_store = {}
@@ -170,6 +173,39 @@ def create_app() -> FastAPI:
             args["cert"] = (MTLS_CERT, MTLS_KEY)
         return args
 
+    def _cache_key(url: str) -> str:
+        return f"cache:{url}"
+
+    def _cacheable(path: str) -> bool:
+        if not CACHE_PREFIXES:
+            return False
+        for p in CACHE_PREFIXES:
+            if path.startswith(p):
+                return True
+        return False
+
+    async def _maybe_cache_get(path: str, perform_request):
+        if not app.state.redis or not _cacheable(path):
+            return await perform_request()
+        key = _cache_key(path)
+        try:
+            val = app.state.redis.get(key)
+            if val:
+                import json as _j
+                data = _j.loads(val)
+                return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
+        except Exception:
+            pass
+        resp = await perform_request()
+        try:
+            # only cache 2xx
+            if getattr(resp, "status_code", 200) < 300:
+                import json as _j
+                app.state.redis.setex(key, CACHE_TTL, _j.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
+        except Exception:
+            pass
+        return resp
+
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -178,20 +214,26 @@ def create_app() -> FastAPI:
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
         _check_cb("integrations")
-        async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
-            body = await _validate_json_body(request)
-            headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-            try:
-                resp = await client.request(request.method, target, content=body, headers=headers)
-                _record_cb("integrations", resp.status_code < 500)
-            except Exception:
-                _record_cb("integrations", False)
-                raise HTTPException(status_code=502, detail="upstream error")
-            try:
-                data = resp.json()
-            except Exception:
-                data = resp.text
-            return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+
+        async def _do():
+            async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
+                body = await _validate_json_body(request)
+                headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
+                try:
+                    resp = await client.request(request.method, target, content=body, headers=headers)
+                    _record_cb("integrations", resp.status_code < 500)
+                except Exception:
+                    _record_cb("integrations", False)
+                    raise HTTPException(status_code=502, detail="upstream error")
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = resp.text
+                return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+
+        if request.method == "GET" and _cacheable(request.url.path):
+            return await _maybe_cache_get(request.url.path, _do)
+        return await _do()
 
     @app.api_route("/proxy/automation/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_automation(path: str, request: Request) -> Any:
@@ -201,20 +243,26 @@ def create_app() -> FastAPI:
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
         _check_cb("automation")
-        async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
-            body = await _validate_json_body(request)
-            headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-            try:
-                resp = await client.request(request.method, target, content=body, headers=headers)
-                _record_cb("automation", resp.status_code < 500)
-            except Exception:
-                _record_cb("automation", False)
-                raise HTTPException(status_code=502, detail="upstream error")
-            try:
-                data = resp.json()
-            except Exception:
-                data = resp.text
-            return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+
+        async def _do():
+            async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
+                body = await _validate_json_body(request)
+                headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
+                try:
+                    resp = await client.request(request.method, target, content=body, headers=headers)
+                    _record_cb("automation", resp.status_code < 500)
+                except Exception:
+                    _record_cb("automation", False)
+                    raise HTTPException(status_code=502, detail="upstream error")
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = resp.text
+                return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+
+        if request.method == "GET" and _cacheable(request.url.path):
+            return await _maybe_cache_get(request.url.path, _do)
+        return await _do()
 
     return app
 
