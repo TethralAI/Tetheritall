@@ -14,7 +14,18 @@ from .models import Base, Device, ApiEndpoint, ScanResult, AuthenticationMethod
 
 
 def get_engine(database_url: str):
-    return create_engine(database_url, pool_pre_ping=True, future=True)
+    # Pool tuning; avoid pooling for SQLite files
+    if database_url.startswith("sqlite"):
+        return create_engine(database_url, future=True)
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        pool_timeout=30,
+        pool_recycle=1800,
+        future=True,
+    )
 
 
 def create_all(database_url: str) -> None:

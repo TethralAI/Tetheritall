@@ -23,8 +23,29 @@ jobs:
         run: |
           pip install ruff
           ruff check iot-api-discovery
-  docker:
+  alembic-drift:
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r iot-api-discovery/requirements.txt
+      - name: Alembic revision --autogenerate check (no changes expected)
+        working-directory: iot-api-discovery
+        run: |
+          alembic revision --autogenerate -m "drift-check" || true
+          if git status --porcelain | grep alembic/versions/; then
+            echo "Alembic drift detected: please generate and commit migrations";
+            git --no-pager diff -- alembic/versions | cat;
+            exit 1;
+          fi
+  docker:
+    needs: [test, alembic-drift]
     runs-on: ubuntu-latest
     permissions:
       contents: read
