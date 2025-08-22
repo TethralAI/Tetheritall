@@ -9,6 +9,7 @@ import time
 import yaml
 from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
+from fastapi.middleware.cors import CORSMiddleware
 
 from agents.coordinator import CoordinatorAgent, CoordinatorConfig
 from config.policy import ConsentPolicy
@@ -116,7 +117,18 @@ class ScanRequest(BaseModel):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="IoT Discovery Coordinator API")
-    _init_tracing("api")
+    # CORS allowlist
+    allow = [o.strip() for o in (settings.outbound_allowlist or "").split(",") if o.strip()]
+    if allow:
+        app.add_middleware(CORSMiddleware, allow_origins=allow, allow_methods=["*"], allow_headers=["*"])
+    # Security headers
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
     app.middleware("http")(request_id_and_logging_middleware)
     app.add_middleware(PrometheusMiddleware)
     app.add_route("/metrics", handle_metrics)
