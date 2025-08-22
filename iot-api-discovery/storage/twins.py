@@ -21,15 +21,19 @@ class TwinStore:
         return f"twin:{provider.lower()}:{external_id}"
 
     def upsert(self, provider: str, external_id: str, name: Optional[str], capabilities: list[str] | None, state: Dict[str, Any] | None) -> None:
+        now = int(time.time())
+        k = self._key(provider, external_id)
+        existing = self.get(provider, external_id) or {}
+        version = int(existing.get("_v", 0)) + 1
         doc = {
+            "_v": version,
+            "_ts": now,
             "provider": provider,
             "external_id": external_id,
             "name": name,
             "capabilities": capabilities or [],
             "state": state or {},
-            "updated_at": int(time.time()),
         }
-        k = self._key(provider, external_id)
         self._mem[k] = doc
         if self._rds:
             try:
