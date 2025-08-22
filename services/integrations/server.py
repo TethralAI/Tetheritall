@@ -135,6 +135,7 @@ def create_app() -> FastAPI:
         app.state.cb[provider] = st
 
     async def _retry(provider: str, func, *args, retries: int = 2, backoff: float = 0.3):
+        import random
         _cb_check(provider)
         for attempt in range(retries + 1):
             try:
@@ -146,7 +147,9 @@ def create_app() -> FastAPI:
                 if attempt >= retries:
                     _cb_record(provider, False)
                     raise HTTPException(status_code=502, detail=f"{provider} error")
-                await asyncio.sleep(backoff * (2 ** attempt))
+                # exponential backoff with jitter
+                jitter = random.uniform(0, backoff)
+                await asyncio.sleep(backoff * (2 ** attempt) + jitter)
         raise HTTPException(status_code=502, detail=f"{provider} error")
 
     @app.get("/health")
