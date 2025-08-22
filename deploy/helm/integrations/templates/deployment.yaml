@@ -24,6 +24,24 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["integrations"]
+                topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: integrations
       containers:
         - name: integrations
           image: {{ .Values.image }}{{ if .Values.imageDigest }}@{{ .Values.imageDigest }}{{ end }}
@@ -35,6 +53,24 @@ spec:
               drop: ["ALL"]
           ports:
             - containerPort: {{ .Values.service.port }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            failureThreshold: 30
+            periodSeconds: 5
           env:
             - name: REDIS_URL
               value: {{ .Values.env.REDIS_URL | quote }}
