@@ -27,11 +27,14 @@ except Exception:
     trace = None  # type: ignore
 
 try:
-    from prometheus_client import Histogram
+    from prometheus_client import Histogram, Counter
 except Exception:
     Histogram = None  # type: ignore
+    Counter = None  # type: ignore
 
 _req_hist = None
+_cache_hits = None
+_cache_misses = None
 if Histogram is not None:
     _req_hist = Histogram(
         "gateway_request_duration_seconds",
@@ -39,6 +42,9 @@ if Histogram is not None:
         labelnames=("method", "path", "status"),
         buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
     )
+if Counter is not None:
+    _cache_hits = Counter("gateway_cache_hits_total", "Gateway cache hits", ["path"])  # type: ignore
+    _cache_misses = Counter("gateway_cache_misses_total", "Gateway cache misses", ["path"])  # type: ignore
 
 
 def _current_trace_id() -> Optional[str]:
@@ -92,6 +98,7 @@ def create_app() -> FastAPI:
     RL_BURST = int(os.getenv("RL_BURST", "30"))
     BODY_MAX_BYTES = int(os.getenv("BODY_MAX_BYTES", "65536"))
     STRICT_JSON = os.getenv("STRICT_JSON", "true").lower() == "true"
+    STRICT_RESPONSE_SCHEMA = os.getenv("STRICT_RESPONSE_SCHEMA", "false").lower() == "true"
     CB_FAILS = int(os.getenv("CB_FAILS", "5"))
     CB_COOLDOWN = int(os.getenv("CB_COOLDOWN", "30"))
     # JWT
@@ -108,6 +115,7 @@ def create_app() -> FastAPI:
     # Caching
     CACHE_PREFIXES = [p.strip() for p in (os.getenv("CACHE_GET_PREFIXES") or "").split(",") if p.strip()]
     CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "60"))
+    CACHE_INVALIDATE_PREFIXES = [p.strip() for p in (os.getenv("CACHE_INVALIDATE_PREFIXES") or "").split(",") if p.strip()]
     # Idempotency
     IDEMP_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "3600"))
     # Schema registry
@@ -204,6 +212,9 @@ def create_app() -> FastAPI:
     @app.get("/openapi/v1.json")
     async def openapi_v1() -> Any:
         return app.openapi()
+
+    def _error(code: str, status: int, message: str, details: Dict[str, Any] | None = None) -> JSONResponse:
+        return JSONResponse(status_code=status, content={"error": {"code": code, "message": message, "details": details or {}}})
 
     def is_allowed_host(url: str) -> bool:
         if not OUTBOUND_ALLOWLIST:
@@ -393,15 +404,102 @@ def create_app() -> FastAPI:
             if matching:
                 raise HTTPException(status_code=403, detail="forbidden by rbac policy")
 
+    def _cache_key(path: str, org: str) -> str:
+        return f"cache:{org}:{path}"
+
+    def _cacheable(path: str) -> bool:
+        if not CACHE_PREFIXES:
+            return False
+        for p in CACHE_PREFIXES:
+            if path.startswith(p):
+                return True
+        return False
+
+    def _invalidate_cache(prefixes: list[str], org: str | None = None) -> None:
+        if not app.state.redis:
+            return
+        try:
+            pat = f"cache:{org or '*'}:*"
+            for key in app.state.redis.scan_iter(pat):  # type: ignore[attr-defined]
+                k = key.decode() if isinstance(key, bytes) else str(key)
+                for p in prefixes:
+                    # org-aware keys store path after second colon
+                    path = k.split(":", 2)[-1]
+                    if path.startswith(p):
+                        app.state.redis.delete(key)
+                        break
+        except Exception:
+            pass
+
+    async def _maybe_cache_get(path: str, org: str, perform_request):
+        if not app.state.redis or not _cacheable(path):
+            return await perform_request()
+        key = _cache_key(path, org)
+        try:
+            val = app.state.redis.get(key)
+            if val:
+                if _cache_hits is not None:
+                    _cache_hits.labels(path).inc()  # type: ignore
+                data = json.loads(val)
+                return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
+        except Exception:
+            pass
+        if _cache_misses is not None:
+            _cache_misses.labels(path).inc()  # type: ignore
+        resp = await perform_request()
+        try:
+            # only cache 2xx
+            if getattr(resp, "status_code", 200) < 300:
+                app.state.redis.setex(key, CACHE_TTL, json.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
+        except Exception:
+            pass
+        return resp
+
+    async def _idempotent_post(path: str, request: Request, perform_request):
+        key = request.headers.get("Idempotency-Key", "").strip()
+        if key:
+            cached = await _get_idempotent_response(path, key)
+            if cached:
+                return cached
+        resp = await perform_request()
+        if key and getattr(resp, "status_code", 200) < 500:
+            _store_idempotent_response(path, key, resp)
+        return resp
+
+    def _with_trace_headers(headers: Dict[str, str]) -> Dict[str, str]:
+        trace_hdr = headers.get("traceparent") or _make_traceparent()
+        out = dict(headers)
+        out["traceparent"] = trace_hdr
+        return out
+
+    def _validate_response_schema(path: str, data: Any) -> None:
+        _, resp_schema = _match_schema(path)
+        if resp_schema:
+            try:
+                jsonschema_validate(instance=data, schema=resp_schema)
+            except ValidationError as ve:
+                if STRICT_RESPONSE_SCHEMA:
+                    raise HTTPException(status_code=502, detail=f"response schema validation failed: {ve.message}")
+                # else best-effort
+                pass
+
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
         # API Key allow-list (simple)
         token = request.headers.get("X-API-Key", "")
         if API_TOKEN and token != API_TOKEN:
-            return JSONResponse(status_code=401, content={"detail": "invalid api key"})
+            return _error("UNAUTHORIZED", 401, "invalid api key")
 
         # JWT (optional) -> org (and possibly roles on request.state)
-        org_id = await _verify_jwt(request)
+        try:
+            org_id = await _verify_jwt(request)
+        except HTTPException as he:
+            if he.status_code == 401:
+                return _error("UNAUTHORIZED", 401, he.detail or "invalid token")
+            if he.status_code == 403:
+                return _error("FORBIDDEN", 403, he.detail or "forbidden")
+            raise
+        request.state.org_id = org_id
 
         # Rate limit per-IP using Redis if available else in-memory
         client_ip = request.client.host if request.client else "unknown"
@@ -413,13 +511,13 @@ def create_app() -> FastAPI:
                 if val == 1:
                     app.state.redis.expire(key, 1)
                 if val > limit:
-                    return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
+                    return _error("RATE_LIMIT_EXCEEDED", 429, "rate limit exceeded")
             else:
                 store = app.state.rate_store
                 count = store.get(key, 0) + 1
                 store[key] = count
                 if count > limit:
-                    return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
+                    return _error("RATE_LIMIT_EXCEEDED", 429, "rate limit exceeded")
         except Exception:
             pass
 
@@ -430,19 +528,33 @@ def create_app() -> FastAPI:
             try:
                 _quota_check(org_id)
             except HTTPException as he:
-                return JSONResponse(status_code=he.status_code, content={"detail": he.detail})
+                return _error("QUOTA_EXCEEDED", he.status_code, he.detail or "quota exceeded")
 
         # RBAC: enforce for proxy capability paths
         roles = _get_roles(request)
         try:
             _rbac_check(org_id, roles, request.method, request.url.path)
         except HTTPException as he:
-            return JSONResponse(status_code=he.status_code, content={"detail": he.detail})
+            return _error("FORBIDDEN", he.status_code, he.detail or "forbidden")
 
         return await call_next(request)
 
     @app.get("/health")
     async def health() -> Dict[str, Any]:
+        return {"ok": True}
+
+    @app.post("/cache/invalidate")
+    async def cache_invalidate(request: Request) -> Dict[str, Any]:
+        # Requires API key if configured
+        token = request.headers.get("X-API-Key", "")
+        if API_TOKEN and token != API_TOKEN:
+            raise HTTPException(status_code=401, detail="invalid api key")
+        body = await request.json()
+        prefixes = body.get("prefixes") or []
+        org = body.get("org")
+        if not isinstance(prefixes, list) or not all(isinstance(p, str) for p in prefixes):
+            raise HTTPException(status_code=400, detail="invalid prefixes")
+        _invalidate_cache(prefixes, org)
         return {"ok": True}
 
     # Proxy endpoints
@@ -500,91 +612,67 @@ def create_app() -> FastAPI:
             args["cert"] = (MTLS_CERT, MTLS_KEY)
         return args
 
-    def _cache_key(url: str) -> str:
-        return f"cache:{url}"
-
-    def _cacheable(path: str) -> bool:
-        if not CACHE_PREFIXES:
-            return False
-        for p in CACHE_PREFIXES:
-            if path.startswith(p):
-                return True
-        return False
-
-    async def _maybe_cache_get(path: str, perform_request):
-        if not app.state.redis or not _cacheable(path):
-            return await perform_request()
-        key = _cache_key(path)
-        try:
-            val = app.state.redis.get(key)
-            if val:
-                data = json.loads(val)
-                return JSONResponse(status_code=data.get("status", 200), content=data.get("body", {}))
-        except Exception:
-            pass
-        resp = await perform_request()
-        try:
-            # only cache 2xx
-            if getattr(resp, "status_code", 200) < 300:
-                app.state.redis.setex(key, CACHE_TTL, json.dumps({"status": resp.status_code, "body": resp.body.decode() if hasattr(resp, 'body') else resp.body}))
-        except Exception:
-            pass
-        return resp
-
-    async def _idempotent_post(path: str, request: Request, perform_request):
-        key = request.headers.get("Idempotency-Key", "").strip()
-        if key:
-            cached = await _get_idempotent_response(path, key)
-            if cached:
-                return cached
-        resp = await perform_request()
-        if key and getattr(resp, "status_code", 200) < 500:
-            _store_idempotent_response(path, key, resp)
-        return resp
-
-    def _with_trace_headers(headers: Dict[str, str]) -> Dict[str, str]:
-        trace_hdr = headers.get("traceparent") or _make_traceparent()
-        out = dict(headers)
-        out["traceparent"] = trace_hdr
-        return out
-
-    def _validate_response_schema(path: str, data: Any) -> None:
-        _, resp_schema = _match_schema(path)
-        if resp_schema:
+    def _with_error_wrap(fn):
+        async def inner(*args, **kwargs):
             try:
-                jsonschema_validate(instance=data, schema=resp_schema)
-            except ValidationError as ve:
-                # Do not fail response by default; could switch to strict mode later
-                pass
+                return await fn(*args, **kwargs)
+            except HTTPException as he:
+                if he.status_code == 413:
+                    return _error("PAYLOAD_TOO_LARGE", 413, he.detail or "payload too large")
+                if he.status_code == 422:
+                    return _error("SCHEMA_INVALID", 422, he.detail or "schema validation failed")
+                if he.status_code == 503:
+                    return _error("UPSTREAM_UNAVAILABLE", 503, he.detail or "upstream unavailable")
+                if he.status_code == 400:
+                    return _error("BAD_REQUEST", 400, he.detail or "bad request")
+                raise
+            except Exception:
+                return _error("UPSTREAM_ERROR", 502, "upstream error")
+        return inner
+
+    def _cache_invalidate_after_mutation(path: str, org: str) -> None:
+        if not CACHE_INVALIDATE_PREFIXES:
+            return
+        _invalidate_cache(CACHE_INVALIDATE_PREFIXES, org)
+
+    @_with_error_wrap
+    async def _proxy_do(target: str, request: Request, cb_target: str) -> JSONResponse:
+        async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
+            body = await _validate_json_body(request)
+            headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
+            headers = _with_trace_headers(headers)
+            try:
+                resp = await client.request(request.method, target, content=body, headers=headers)
+                _record_cb(cb_target, resp.status_code < 500)
+            except Exception:
+                _record_cb(cb_target, False)
+                raise HTTPException(status_code=502, detail="upstream error")
+            try:
+                data = resp.json()
+            except Exception:
+                data = resp.text
+            _validate_response_schema(request.url.path, data if isinstance(data, dict) else {"data": data})
+            out = JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+            if _is_mutating(request.method):
+                _cache_invalidate_after_mutation(request.url.path, getattr(request.state, "org_id", "default"))
+            return out
 
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
-            raise HTTPException(status_code=502, detail="integrations not configured")
+            return _error("UPSTREAM_NOT_CONFIGURED", 502, "integrations not configured")
         target = f"{INTEGRATIONS_BASE_URL}/{path}"
         if not is_allowed_host(target):
-            raise HTTPException(status_code=403, detail="outbound host not allowed")
+            return _error("OUTBOUND_DENIED", 403, "outbound host not allowed")
         _check_cb("integrations")
 
+        org = getattr(request.state, "org_id", "default")
+
         async def _do():
-            async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
-                body = await _validate_json_body(request)
-                headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-                headers = _with_trace_headers(headers)
-                try:
-                    resp = await client.request(request.method, target, content=body, headers=headers)
-                    _record_cb("integrations", resp.status_code < 500)
-                except Exception:
-                    _record_cb("integrations", False)
-                    raise HTTPException(status_code=502, detail="upstream error")
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = resp.text
-                return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+            return await _proxy_do(target, request, "integrations")
 
         if request.method == "GET" and _cacheable(request.url.path):
-            return await _maybe_cache_get(request.url.path, _do)
+            return await _maybe_cache_get(request.url.path, org, _do)
         if request.method == "POST":
             return await _idempotent_post(request.url.path, request, _do)
         return await _do()
@@ -592,31 +680,18 @@ def create_app() -> FastAPI:
     @app.api_route("/proxy/automation/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_automation(path: str, request: Request) -> Any:
         if not AUTOMATION_BASE_URL:
-            raise HTTPException(status_code=502, detail="automation not configured")
+            return _error("UPSTREAM_NOT_CONFIGURED", 502, "automation not configured")
         target = f"{AUTOMATION_BASE_URL}/{path}"
         if not is_allowed_host(target):
-            raise HTTPException(status_code=403, detail="outbound host not allowed")
+            return _error("OUTBOUND_DENIED", 403, "outbound host not allowed")
         _check_cb("automation")
 
         async def _do():
-            async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
-                body = await _validate_json_body(request)
-                headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
-                headers = _with_trace_headers(headers)
-                try:
-                    resp = await client.request(request.method, target, content=body, headers=headers)
-                    _record_cb("automation", resp.status_code < 500)
-                except Exception:
-                    _record_cb("automation", False)
-                    raise HTTPException(status_code=502, detail="upstream error")
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = resp.text
-                return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
+            return await _proxy_do(target, request, "automation")
 
         if request.method == "GET" and _cacheable(request.url.path):
-            return await _maybe_cache_get(request.url.path, _do)
+            org = getattr(request.state, "org_id", "default")
+            return await _maybe_cache_get(request.url.path, org, _do)
         if request.method == "POST":
             return await _idempotent_post(request.url.path, request, _do)
         return await _do()
