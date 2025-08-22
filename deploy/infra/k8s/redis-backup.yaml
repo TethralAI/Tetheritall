@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-backup-pvc
+  namespace: iot
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+  namespace: iot
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: ghcr.io/restic/restic:0.16.4
+              env:
+                - name: RESTIC_PASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: redis-backup-secrets, key: restic_password}
+                - name: RESTIC_REPOSITORY
+                  valueFrom:
+                    secretKeyRef: {name: redis-backup-secrets, key: restic_repository}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: {name: redis-backup-secrets, key: access_key}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: {name: redis-backup-secrets, key: secret_key}
+                - name: AWS_DEFAULT_REGION
+                  value: us-east-1
+              volumeMounts:
+                - name: redis-dump
+                  mountPath: /backup
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  apk add --no-cache redis
+                  ts=$(date +%Y%m%dT%H%M%SZ)
+                  redis-cli -h redis.iot.svc.cluster.local -p 6379 --rdb /backup/dump-${ts}.rdb
+                  restic backup /backup
+          volumes:
+            - name: redis-dump
+              persistentVolumeClaim:
+                claimName: redis-backup-pvc
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-restore
+  namespace: iot
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: restore
+          image: ghcr.io/restic/restic:0.16.4
+          env:
+            - name: RESTIC_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: redis-backup-secrets, key: restic_password}
+            - name: RESTIC_REPOSITORY
+              valueFrom:
+                secretKeyRef: {name: redis-backup-secrets, key: restic_repository}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: redis-backup-secrets, key: access_key}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: redis-backup-secrets, key: secret_key}
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+          volumeMounts:
+            - name: redis-dump
+              mountPath: /restore
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              restic restore latest --target /restore
+              echo "Restored to /restore; apply RDB manually to Redis as needed"
+      volumes:
+        - name: redis-dump
+          persistentVolumeClaim:
+            claimName: redis-backup-pvc

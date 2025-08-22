@@ -1,0 +1,43 @@
+{{- if .Values.observability.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api
+  namespace: {{ .Values.namespace | default "iot" }}
+spec:
+  selector:
+    matchLabels:
+      app: api
+  endpoints:
+    - port: http
+      targetPort: 8000
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gateway
+  namespace: {{ .Values.namespace | default "iot" }}
+spec:
+  selector:
+    matchLabels:
+      app: gateway
+  endpoints:
+    - port: http
+      targetPort: 8001
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: integrations
+  namespace: {{ .Values.namespace | default "iot" }}
+spec:
+  selector:
+    matchLabels:
+      app: integrations
+  endpoints:
+    - port: http
+      targetPort: 8100
+      path: /metrics
+{{- end }}

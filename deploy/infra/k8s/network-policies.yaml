@@ -1,0 +1,133 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-namespace
+  namespace: iot
+spec:
+  podSelector:
+    matchLabels: {app: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: collector-allow-namespace
+  namespace: iot
+spec:
+  podSelector:
+    matchLabels: {app: otel-collector}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {port: 4317, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-policy
+  namespace: iot
+spec:
+  podSelector:
+    matchLabels: {app: api}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: gateway}}
+        - namespaceSelector: {}
+      ports:
+        - {port: 8000, protocol: TCP}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app: redis}}
+        - podSelector: {matchLabels: {app: otel-collector}}
+        - podSelector: {matchLabels: {app: postgres}}
+      ports:
+        - {port: 6379, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: integrations-policy
+  namespace: iot
+spec:
+  podSelector:
+    matchLabels: {app: integrations}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: gateway}}
+      ports:
+        - {port: 8100, protocol: TCP}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app: redis}}
+        - podSelector: {matchLabels: {app: otel-collector}}
+        - podSelector: {matchLabels: {app: postgres}}
+      ports:
+        - {port: 6379, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-policy
+  namespace: iot
+spec:
+  podSelector:
+    matchLabels: {app: gateway}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - {port: 8001, protocol: TCP}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app: integrations}}
+        - podSelector: {matchLabels: {app: redis}}
+        - podSelector: {matchLabels: {app: otel-collector}}
+      ports:
+        - {port: 8100, protocol: TCP}
+        - {port: 6379, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: iot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: api}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-pdb
+  namespace: iot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: gateway}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: integrations-pdb
+  namespace: iot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: integrations}

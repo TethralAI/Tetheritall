@@ -1,0 +1,18 @@
+apiVersion: v2
+name: tetheritall-umbrella
+version: 0.1.0
+description: Umbrella chart for Tetheritall (api, integrations, gateway)
+type: application
+dependencies:
+  - name: tetheritall-api
+    alias: api
+    version: 0.1.0
+    repository: file://../api
+  - name: tetheritall-integrations
+    alias: integrations
+    version: 0.1.0
+    repository: file://../integrations
+  - name: tetheritall-gateway
+    alias: gateway
+    version: 0.1.0
+    repository: file://../gateway

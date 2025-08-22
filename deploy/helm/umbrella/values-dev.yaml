@@ -1,0 +1,9 @@
+namespace: iot
+global:
+  redisUrl: redis://redis:6379/0
+api:
+  replicaCount: 1
+integrations:
+  replicaCount: 1
+gateway:
+  replicaCount: 1

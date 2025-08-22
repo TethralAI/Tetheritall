@@ -1,0 +1,49 @@
+# Global/defaults
+namespace: iot
+global:
+  redisUrl: redis://redis:6379/0
+  otelExporter: http://otel-collector.iot.svc.cluster.local:4318
+
+ingress:
+  enabled: false
+  host: example.com
+  className: nginx
+  tlsSecret: gateway-tls
+
+observability:
+  serviceMonitor:
+    enabled: false
+
+externalSecrets:
+  enabled: true
+  secretStore: eso
+  gateway:
+    apiToken:
+      key: gateway/api_token
+    jwtSecret:
+      key: gateway/jwt_secret
+    jwksUrl:
+      key: gateway/jwks_url
+  database:
+    url:
+      key: app/DATABASE_URL
+
+api:
+  env:
+    REDIS_URL: redis://redis:6379/0
+  image: ghcr.io/tethralai/tetheritall-api:latest
+  replicaCount: 2
+
+integrations:
+  env:
+    REDIS_URL: redis://redis:6379/0
+  image: ghcr.io/tethralai/tetheritall-integrations:latest
+  replicaCount: 2
+
+gateway:
+  env:
+    API_TOKEN: "change-me"
+    REDIS_URL: redis://redis:6379/0
+    INTEGRATIONS_BASE_URL: http://integrations.iot.svc.cluster.local:8100
+  image: ghcr.io/tethralai/tetheritall-gateway:latest
+  replicaCount: 2
