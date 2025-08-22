@@ -74,10 +74,33 @@ spec:
         - name: gateway
           image: ghcr.io/tethralai/tetheritall-gateway:latest
           env:
-            - {name: API_TOKEN, valueFrom: {secretKeyRef: {name: api-token, key: token}}}
+            - name: API_TOKEN
+              valueFrom: {secretKeyRef: {name: gateway-secrets, key: api_token}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: gateway-secrets, key: jwt_secret}}
+            - name: JWKS_URL
+              valueFrom: {secretKeyRef: {name: gateway-secrets, key: jwks_url}}
+            - name: MTLS_CA_PATH
+              value: /etc/mtls/ca.crt
+            - name: MTLS_CLIENT_CERT_PATH
+              value: /etc/mtls/tls.crt
+            - name: MTLS_CLIENT_KEY_PATH
+              value: /etc/mtls/tls.key
             - {name: REDIS_URL, value: redis://redis:6379/0}
             - {name: INTEGRATIONS_BASE_URL, value: http://integrations.iot.svc.cluster.local:8100}
+          volumeMounts:
+            - name: mtls
+              mountPath: /etc/mtls
+              readOnly: true
           ports: [{containerPort: 8001}]
+      volumes:
+        - name: mtls
+          secret:
+            secretName: gateway-secrets
+            items:
+              - {key: mtls_ca, path: ca.crt}
+              - {key: mtls_client_cert, path: tls.crt}
+              - {key: mtls_client_key, path: tls.key}
 ---
 apiVersion: v1
 kind: Service
