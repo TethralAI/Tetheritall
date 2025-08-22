@@ -1,34 +1,24 @@
-apiVersion: v1
-kind: List
-items:
-  - apiVersion: v1
-    kind: PodSecurityContext
-    metadata:
-      name: api-psc
-    runAsNonRoot: true
-    runAsUser: 10001
-    fsGroup: 10001
-  - apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    metadata:
-      name: api-allow-redis-gateway
-    spec:
-      podSelector:
-        matchLabels:
-          app: api
-      policyTypes:
-        - Ingress
-        - Egress
-      ingress:
-        - from:
-            - podSelector:
-                matchLabels:
-                  app: gateway
-      egress:
-        - to:
-            - podSelector:
-                matchLabels:
-                  app: redis
-            - podSelector:
-                matchLabels:
-                  app: integrations
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-allow-redis-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+        - podSelector:
+            matchLabels:
+              app: integrations
