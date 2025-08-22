@@ -19,6 +19,7 @@ spec:
           image: ghcr.io/tethralai/tetheritall-api:latest
           env:
             - {name: REDIS_URL, value: redis://redis:6379/0}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
           ports: [{containerPort: 8000}]
 ---
 apiVersion: v1
@@ -47,6 +48,7 @@ spec:
           image: ghcr.io/tethralai/tetheritall-integrations:latest
           env:
             - {name: REDIS_URL, value: redis://redis:6379/0}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
           ports: [{containerPort: 8100}]
 ---
 apiVersion: v1
@@ -88,6 +90,7 @@ spec:
               value: /etc/mtls/tls.key
             - {name: REDIS_URL, value: redis://redis:6379/0}
             - {name: INTEGRATIONS_BASE_URL, value: http://integrations.iot.svc.cluster.local:8100}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.iot.svc.cluster.local:4318}
           volumeMounts:
             - name: mtls
               mountPath: /etc/mtls
