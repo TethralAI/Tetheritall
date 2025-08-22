@@ -99,10 +99,9 @@ class EventBus:
             try:
                 if self._nats is None:
                     self._nats = NATS()
-                    # Best-effort connect
                     loop = asyncio.get_event_loop()
-                    loop.run_until_complete(self._nats.connect(settings.nats_url or "nats://localhost:4222"))
-                self._nats.publish(topic.encode(), json.dumps(payload).encode())  # type: ignore[attr-defined]
+                    loop.run_until_complete(self._nats.connect(settings.nats_url or "nats://nats:4222"))
+                self._nats.publish(topic, json.dumps(payload).encode())  # type: ignore[arg-type]
                 return "nats"
             except Exception:
                 return None
@@ -140,8 +139,23 @@ class EventBus:
                 return entries
             except Exception:
                 return []
-        # For non-redis backends, not implemented in this worker path yet
+        # For non-redis backends, not used by Redis worker path
         return []
+
+    async def subscribe_nats(self, subject: str, handler) -> None:
+        if self.backend != "nats" or NATS is None:
+            return
+        if self._nats is None:
+            self._nats = NATS()
+            await self._nats.connect(settings.nats_url or "nats://nats:4222")
+        async def _cb(msg):  # type: ignore
+            try:
+                data = json.loads(msg.data.decode())
+            except Exception:
+                data = {}
+            self._record_consume(subject)
+            await handler(subject, data)
+        await self._nats.subscribe(subject, cb=_cb)
 
     def ack(self, group: str, entry_id: str) -> None:
         if self.backend == "redis":
