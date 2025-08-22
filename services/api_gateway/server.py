@@ -28,6 +28,7 @@ def create_app() -> FastAPI:
     INTEGRATIONS_BASE_URL = os.getenv("INTEGRATIONS_BASE_URL") or os.getenv("INTEGRATIONS_BASE_URL".lower())
     AUTOMATION_BASE_URL = os.getenv("AUTOMATION_BASE_URL")
     ORG_ID_HEADER = os.getenv("ORG_ID_HEADER", "X-Org-Id")
+    ORG_ROLES_HEADER = os.getenv("ORG_ROLES_HEADER", "X-Org-Roles")
     # Token bucket-ish limits (per second) and burst window in seconds
     RL_RPS = int(os.getenv("RL_RPS", "10"))
     RL_BURST = int(os.getenv("RL_BURST", "30"))
@@ -53,9 +54,16 @@ def create_app() -> FastAPI:
     IDEMP_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "3600"))
     # Schema registry
     SCHEMA_FILE = os.getenv("GATEWAY_SCHEMA_FILE")
+    # Quotas (per org)
+    QUOTA_HOURLY = int(os.getenv("QUOTA_HOURLY", "10000"))
+    QUOTA_DAILY = int(os.getenv("QUOTA_DAILY", "100000"))
+    # RBAC policies (JSON string or file)
+    RBAC_POLICIES_ENV = os.getenv("RBAC_POLICIES")
+    RBAC_POLICIES_FILE = os.getenv("RBAC_POLICIES_FILE")
 
-    # Simple in-memory RL fallback
+    # Simple in-memory RL and quotas fallback
     app.state.rate_store = {}
+    app.state.quota_store = {}
     app.state.cb = {"integrations": {"open_until": 0, "fails": 0}, "automation": {"open_until": 0, "fails": 0}}
 
     # Redis / Sentinel
@@ -78,6 +86,7 @@ def create_app() -> FastAPI:
 
     app.state.jwks = {"fetched": 0, "keys": {}}
     app.state.schemas = []
+    app.state.rbac = {"policies": []}
 
     # Load schema registry (optional). Format: [{"path_prefix": "/capability/smartthings", "request_schema": {...}, "response_schema": {...}}]
     if SCHEMA_FILE and os.path.exists(SCHEMA_FILE):
@@ -86,6 +95,27 @@ def create_app() -> FastAPI:
                 app.state.schemas = json.load(f)
         except Exception:
             app.state.schemas = []
+
+    # Load RBAC policies
+    def _load_rbac() -> None:
+        data: Any = None
+        if RBAC_POLICIES_ENV:
+            try:
+                data = json.loads(RBAC_POLICIES_ENV)
+            except Exception:
+                data = None
+        if data is None and RBAC_POLICIES_FILE and os.path.exists(RBAC_POLICIES_FILE):
+            try:
+                with open(RBAC_POLICIES_FILE, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = None
+        if isinstance(data, dict) and isinstance(data.get("policies"), list):
+            app.state.rbac = data
+        else:
+            app.state.rbac = {"policies": []}
+
+    _load_rbac()
 
     def _match_schema(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         for entry in app.state.schemas or []:
@@ -166,6 +196,9 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail="org denied")
             if ORG_ALLOWLIST and org not in ORG_ALLOWLIST:
                 raise HTTPException(status_code=403, detail="org not allowed")
+            # attach roles to request state for downstream RBAC
+            roles = payload.get("roles")
+            request.state.org_roles = roles if isinstance(roles, list) else None
             return org
         except HTTPException:
             raise
@@ -196,6 +229,94 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
+    def _is_mutating(method: str) -> bool:
+        return method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+
+    def _quota_keys(org: str) -> Tuple[str, str]:
+        now = int(time.time())
+        hour = now // 3600
+        day = now // 86400
+        return (f"quota:hour:{org}:{hour}", f"quota:day:{org}:{day}")
+
+    def _quota_inc(org: str) -> Optional[int]:
+        try:
+            if app.state.redis:
+                hk, dk = _quota_keys(org)
+                hv = app.state.redis.incr(hk)
+                dv = app.state.redis.incr(dk)
+                if hv == 1:
+                    app.state.redis.expire(hk, 3600)
+                if dv == 1:
+                    app.state.redis.expire(dk, 86400)
+                return max(hv, dv)
+            # in-memory fallback
+            hk, dk = _quota_keys(org)
+            store = app.state.quota_store
+            hv = store.get(hk, 0) + 1
+            dv = store.get(dk, 0) + 1
+            store[hk] = hv
+            store[dk] = dv
+            return max(hv, dv)
+        except Exception:
+            return None
+
+    def _quota_check(org: str) -> None:
+        hv, dv = 0, 0
+        try:
+            if app.state.redis:
+                hk, dk = _quota_keys(org)
+                hv = int(app.state.redis.get(hk) or 0)
+                dv = int(app.state.redis.get(dk) or 0)
+            else:
+                hk, dk = _quota_keys(org)
+                hv = int(app.state.quota_store.get(hk, 0))
+                dv = int(app.state.quota_store.get(dk, 0))
+        except Exception:
+            hv, dv = 0, 0
+        if hv > QUOTA_HOURLY or dv > QUOTA_DAILY:
+            raise HTTPException(status_code=429, detail="quota exceeded")
+
+    def _get_roles(request: Request) -> list[str]:
+        if getattr(request.state, "org_roles", None):
+            roles = request.state.org_roles
+            if isinstance(roles, list):
+                return [str(r).lower() for r in roles]
+        raw = request.headers.get(ORG_ROLES_HEADER, "")
+        return [r.strip().lower() for r in raw.split(",") if r.strip()]
+
+    def _rbac_check(org: str, roles: list[str], method: str, path: str) -> None:
+        # Default allow if no policies
+        policies = app.state.rbac.get("policies", [])
+        if not policies:
+            return
+        # Evaluate deny-first then allow
+        decided: Optional[bool] = None
+        for pol in policies:
+            orgs = pol.get("orgs") or []
+            if orgs and org not in orgs:
+                continue
+            methods = [m.upper() for m in (pol.get("methods") or [])]
+            if methods and method.upper() not in methods:
+                continue
+            prefixes = pol.get("path_prefixes") or []
+            if prefixes and not any(path.startswith(p) for p in prefixes):
+                continue
+            req_roles = [str(r).lower() for r in (pol.get("roles") or [])]
+            if req_roles and not any(r in roles for r in req_roles):
+                continue
+            effect = (pol.get("effect") or "allow").lower()
+            if effect == "deny":
+                decided = False
+            elif effect == "allow":
+                decided = True
+        if decided is False:
+            raise HTTPException(status_code=403, detail="forbidden by rbac policy")
+        # If no allow matched and some policies exist for this path, deny by default
+        if decided is None:
+            matching = [pol for pol in policies if any(path.startswith(p) for p in (pol.get("path_prefixes") or []))]
+            if matching:
+                raise HTTPException(status_code=403, detail="forbidden by rbac policy")
+
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
         # API Key allow-list (simple)
@@ -203,7 +324,7 @@ def create_app() -> FastAPI:
         if API_TOKEN and token != API_TOKEN:
             return JSONResponse(status_code=401, content={"detail": "invalid api key"})
 
-        # JWT (optional)
+        # JWT (optional) -> org (and possibly roles on request.state)
         org_id = await _verify_jwt(request)
 
         # Rate limit per-IP using Redis if available else in-memory
@@ -225,6 +346,22 @@ def create_app() -> FastAPI:
                     return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
         except Exception:
             pass
+
+        # Quotas: enforce on mutating requests and capability actions
+        if _is_mutating(request.method):
+            # increment counters then check against thresholds
+            _quota_inc(org_id)
+            try:
+                _quota_check(org_id)
+            except HTTPException as he:
+                return JSONResponse(status_code=he.status_code, content={"detail": he.detail})
+
+        # RBAC: enforce for proxy capability paths
+        roles = _get_roles(request)
+        try:
+            _rbac_check(org_id, roles, request.method, request.url.path)
+        except HTTPException as he:
+            return JSONResponse(status_code=he.status_code, content={"detail": he.detail})
 
         return await call_next(request)
 
@@ -401,7 +538,6 @@ def create_app() -> FastAPI:
                     data = resp.json()
                 except Exception:
                     data = resp.text
-                _validate_response_schema(request.url.path, data if isinstance(data, dict) else {"data": data})
                 return JSONResponse(status_code=resp.status_code, content=data if isinstance(data, dict) else {"data": data})
 
         if request.method == "GET" and _cacheable(request.url.path):

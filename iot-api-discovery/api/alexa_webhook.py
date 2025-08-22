@@ -2,18 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any, Dict
-import hmac
-import hashlib
 
 from config.settings import settings
+from api.webhook_security import verify_hmac_hex, seen_event
 
 
 router = APIRouter()
-
-
-def _verify_signature(secret: str, body: bytes, sig: str) -> bool:
-    mac = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, sig or "")
 
 
 @router.post("/integrations/alexa/webhook")
@@ -21,14 +15,20 @@ async def alexa_webhook(request: Request) -> Dict[str, Any]:
     secret = settings.alexa_skill_secret
     body = await request.body()
     sig = request.headers.get("X-Signature", "")
-    if secret and not _verify_signature(secret, body, sig):
+    if secret and not verify_hmac_hex(secret, body, sig):
         raise HTTPException(status_code=401, detail="invalid signature")
-    # Echo back directive (stub)
     payload = await request.json()
+    message_id = (
+        payload.get("directive", {})
+        .get("header", {})
+        .get("messageId", "")
+    )
+    if seen_event(message_id, ttl=300, prefix="alexa"):
+        return {"ok": True}
     # Minimal Smart Home response stub
     return {
         "event": {
-            "header": {"namespace": "Alexa", "name": "Response", "messageId": payload.get("directive", {}).get("header", {}).get("messageId", "")},
+            "header": {"namespace": "Alexa", "name": "Response", "messageId": message_id},
             "payload": {},
         }
     }
