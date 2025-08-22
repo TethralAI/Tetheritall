@@ -1,0 +1,28 @@
+# Global/defaults
+namespace: iot
+global:
+  redisUrl: redis://redis:6379/0
+  otelExporter: http://otel-collector.iot.svc.cluster.local:4318
+
+api:
+  namespaceOverride: {{ .Values.namespace }}
+  env:
+    REDIS_URL: {{ .Values.global.redisUrl }}
+  image: ghcr.io/tethralai/tetheritall-api:latest
+  replicaCount: 2
+
+integrations:
+  namespaceOverride: {{ .Values.namespace }}
+  env:
+    REDIS_URL: {{ .Values.global.redisUrl }}
+  image: ghcr.io/tethralai/tetheritall-integrations:latest
+  replicaCount: 2
+
+gateway:
+  namespaceOverride: {{ .Values.namespace }}
+  env:
+    API_TOKEN: "change-me"
+    REDIS_URL: {{ .Values.global.redisUrl }}
+    INTEGRATIONS_BASE_URL: http://integrations.iot.svc.cluster.local:8100
+  image: ghcr.io/tethralai/tetheritall-gateway:latest
+  replicaCount: 2
