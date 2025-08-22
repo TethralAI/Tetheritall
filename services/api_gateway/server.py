@@ -8,6 +8,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
+import jwt
 
 
 def parse_allowlist(env_val: str | None) -> set[str]:
@@ -31,6 +32,15 @@ def create_app() -> FastAPI:
     STRICT_JSON = os.getenv("STRICT_JSON", "true").lower() == "true"
     CB_FAILS = int(os.getenv("CB_FAILS", "5"))
     CB_COOLDOWN = int(os.getenv("CB_COOLDOWN", "30"))
+    # JWT
+    JWT_SECRET = os.getenv("JWT_SECRET")
+    JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
+    ORG_ALLOWLIST = parse_allowlist(os.getenv("ORG_ALLOWLIST"))
+    ORG_DENYLIST = parse_allowlist(os.getenv("ORG_DENYLIST"))
+    # mTLS
+    MTLS_CA = os.getenv("MTLS_CA_PATH")
+    MTLS_CERT = os.getenv("MTLS_CLIENT_CERT_PATH")
+    MTLS_KEY = os.getenv("MTLS_CLIENT_KEY_PATH")
 
     # Simple in-memory RL fallback
     app.state.rate_store = {}
@@ -55,6 +65,26 @@ def create_app() -> FastAPI:
     def _bucket_key(ip: str, org: str, path: str) -> str:
         return f"rl2:{org}:{ip}:{path}:{int(time.time())}"
 
+    def _verify_jwt(request: Request) -> str:
+        if not JWT_SECRET:
+            return request.headers.get(ORG_ID_HEADER, "default")
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="missing bearer token")
+        token = auth.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=JWT_AUDIENCE) if JWT_AUDIENCE else jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            org = str(payload.get("org") or payload.get("tenant") or request.headers.get(ORG_ID_HEADER) or "default")
+            if ORG_DENYLIST and org in ORG_DENYLIST:
+                raise HTTPException(status_code=403, detail="org denied")
+            if ORG_ALLOWLIST and org not in ORG_ALLOWLIST:
+                raise HTTPException(status_code=403, detail="org not allowed")
+            return org
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail="invalid token")
+
     @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
         # API Key allow-list (simple)
@@ -62,9 +92,11 @@ def create_app() -> FastAPI:
         if API_TOKEN and token != API_TOKEN:
             return JSONResponse(status_code=401, content={"detail": "invalid api key"})
 
+        # JWT (optional)
+        org_id = _verify_jwt(request)
+
         # Rate limit per-IP using Redis if available else in-memory
         client_ip = request.client.host if request.client else "unknown"
-        org_id = request.headers.get(ORG_ID_HEADER, "default")
         key = _bucket_key(client_ip, org_id, request.url.path)
         limit = RL_RPS
         try:
@@ -129,6 +161,15 @@ def create_app() -> FastAPI:
             if st["fails"] >= CB_FAILS:
                 st["open_until"] = now + CB_COOLDOWN
         app.state.cb[target] = st
+
+    def _mtls_args() -> Dict[str, Any]:
+        args: Dict[str, Any] = {}
+        if MTLS_CA:
+            args["verify"] = MTLS_CA
+        if MTLS_CERT and MTLS_KEY:
+            args["cert"] = (MTLS_CERT, MTLS_KEY)
+        return args
+
     @app.api_route("/proxy/integrations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def proxy_integrations(path: str, request: Request) -> Any:
         if not INTEGRATIONS_BASE_URL:
@@ -137,7 +178,7 @@ def create_app() -> FastAPI:
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
         _check_cb("integrations")
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
             body = await _validate_json_body(request)
             headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
             try:
@@ -160,7 +201,7 @@ def create_app() -> FastAPI:
         if not is_allowed_host(target):
             raise HTTPException(status_code=403, detail="outbound host not allowed")
         _check_cb("automation")
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, **_mtls_args()) as client:
             body = await _validate_json_body(request)
             headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length"}}
             try:

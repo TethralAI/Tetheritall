@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # Hubitat Maker API (optional)
     hubitat_maker_base_url: str | None = None  # e.g., http://hubitat.local/apps/api/<appId>
     hubitat_maker_token: str | None = None
+    # mTLS for outgoing HTTP clients
+    mtls_ca_path: str | None = None
+    mtls_client_cert_path: str | None = None
+    mtls_client_key_path: str | None = None
 
     class Config:
         env_file = ".env"
