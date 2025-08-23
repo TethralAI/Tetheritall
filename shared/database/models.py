@@ -1,0 +1,218 @@
+"""
+SQLAlchemy ORM models for IoT API Discovery
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, JSON
+from sqlalchemy.orm import declarative_base, relationship
+
+
+Base = declarative_base()
+
+
+class Device(Base):
+    __tablename__ = "devices"
+
+    id = Column(Integer, primary_key=True)
+    model = Column(String(255), nullable=False, index=True)
+    manufacturer = Column(String(255), nullable=False, index=True)
+    firmware_version = Column(String(255), nullable=True)
+    last_scanned = Column(DateTime, default=None, nullable=True)
+
+    api_endpoints = relationship("ApiEndpoint", back_populates="device", cascade="all, delete-orphan")
+    scan_results = relationship("ScanResult", back_populates="device", cascade="all, delete-orphan")
+    auth_methods = relationship("AuthenticationMethod", back_populates="device", cascade="all, delete-orphan")
+
+
+class ApiEndpoint(Base):
+    __tablename__ = "api_endpoints"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    url = Column(Text, nullable=False)
+    method = Column(String(16), default="GET", nullable=False)
+    auth_required = Column(Boolean, default=False, nullable=False)
+    success_rate = Column(Float, default=0.0, nullable=False)
+
+    device = relationship("Device", back_populates="api_endpoints")
+
+
+class ScanResult(Base):
+    __tablename__ = "scan_results"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    agent_type = Column(String(64), nullable=False)
+    raw_data = Column(Text, nullable=False)
+
+    device = relationship("Device", back_populates="scan_results")
+
+
+class AuthenticationMethod(Base):
+    __tablename__ = "authentication_methods"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    auth_type = Column(String(64), nullable=False)
+    credentials = Column(Text, nullable=True)
+    success_rate = Column(Float, default=0.0, nullable=False)
+
+    device = relationship("Device", back_populates="auth_methods")
+
+
+# Phase 2 Models for Device State Management
+class DeviceState(Base):
+    __tablename__ = "device_states"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(255), nullable=False, index=True, unique=True)
+    current_state = Column(String(64), nullable=False)  # StateType enum value
+    last_updated = Column(DateTime, default=datetime.utcnow, nullable=False)
+    configuration = Column(JSON, nullable=True)  # Device configuration as JSON
+    device_metadata = Column(JSON, nullable=True)  # Additional metadata as JSON
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StateChange(Base):
+    __tablename__ = "state_changes"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    from_state = Column(String(64), nullable=True)  # Previous state
+    to_state = Column(String(64), nullable=False)  # New state
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    reason = Column(String(255), nullable=True)  # Reason for state change
+    change_metadata = Column(JSON, nullable=True)  # Additional metadata
+
+
+# Phase 2 Models for Event System
+class Event(Base):
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True)
+    event_id = Column(String(255), nullable=False, index=True, unique=True)
+    event_type = Column(String(64), nullable=False, index=True)  # EventType enum value
+    source = Column(String(255), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    data = Column(JSON, nullable=True)  # Event data as JSON
+    event_metadata = Column(JSON, nullable=True)  # Event metadata as JSON
+    priority = Column(String(32), nullable=False)  # EventPriority enum value
+    ttl = Column(Integer, nullable=True)  # Time to live in seconds
+    delivered = Column(Boolean, default=False, nullable=False)  # Whether event was delivered
+
+
+class EventSubscription(Base):
+    __tablename__ = "event_subscriptions"
+
+    id = Column(Integer, primary_key=True)
+    subscription_id = Column(String(255), nullable=False, index=True, unique=True)
+    subscriber_id = Column(String(255), nullable=False, index=True)
+    event_types = Column(JSON, nullable=True)  # List of EventType enum values
+    sources = Column(JSON, nullable=True)  # List of source filters
+    priority_filter = Column(String(32), nullable=True)  # EventPriority enum value
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(String(64), primary_key=True)
+    manufacturer = Column(String(255), nullable=False)
+    model = Column(String(255), nullable=True)
+    priority = Column(Integer, default=10, nullable=False)
+    state = Column(String(32), default="queued", nullable=False)
+    payload = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    paused = Column(Boolean, default=False, nullable=False)
+    canceled = Column(Boolean, default=False, nullable=False)
+
+
+class IntegrationCredential(Base):
+    __tablename__ = "integration_credentials"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(64), nullable=False, index=True)  # e.g., smartthings, tuya
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    extra = Column(Text, nullable=True)  # JSON string for additional fields
+    tenant_id = Column(String(64), nullable=True, index=True)
+    encrypted = Column(Boolean, default=False, nullable=False)
+
+
+class AutomationRuleModel(Base):
+    __tablename__ = "automation_rules"
+
+    id = Column(String(128), primary_key=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    trigger = Column(Text, nullable=False)  # JSON
+    conditions = Column(Text, nullable=True)  # JSON
+    actions = Column(Text, nullable=False)  # JSON
+    schedule_interval_seconds = Column(Integer, nullable=True)  # optional periodic schedule
+    last_run_at = Column(DateTime, nullable=True)
+    cron: Column = Column(String(128), nullable=True)  # optional cron expression
+
+
+class DeviceTwin(Base):
+    __tablename__ = "device_twins"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(64), nullable=False, index=True)  # e.g., zigbee2mqtt, smartthings
+    external_id = Column(String(255), nullable=False, index=True)  # device identifier in provider
+    name = Column(String(255), nullable=True)
+    state = Column(Text, nullable=True)  # JSON state snapshot
+    capabilities = Column(Text, nullable=True)  # JSON array of capability names
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    version = Column(Integer, default=1, nullable=False)
+
+
+class DeviceTwinVersion(Base):
+    __tablename__ = "device_twins_versions"
+
+    id = Column(Integer, primary_key=True)
+    twin_id = Column(Integer, ForeignKey("device_twins.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    diff = Column(Text, nullable=True)  # JSON diff (optional)
+    full = Column(Text, nullable=False)  # JSON full document
+    event_id = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Mapping(Base):
+    __tablename__ = "mappings"
+
+    id = Column(Integer, primary_key=True)
+    source_provider = Column(String(64), nullable=False, index=True)
+    source_external_id = Column(String(255), nullable=False, index=True)
+    target_provider = Column(String(64), nullable=False, index=True)
+    target_external_id = Column(String(255), nullable=False, index=True)
+    confidence = Column(Float, default=0.0, nullable=False)
+    status = Column(String(32), default="proposed", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(64), nullable=False, index=True)
+    payload = Column(Text, nullable=False)  # JSON
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class Outbox(Base):
+    __tablename__ = "outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic = Column(String(255), nullable=False)
+    payload = Column(Text, nullable=False)  # JSON
+    available_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+

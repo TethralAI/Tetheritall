@@ -1,27 +1,62 @@
 SHELL := /usr/bin/bash
 
-.PHONY: up down logs helm-deps helm-render-dev helm-render-prod helm-install-dev helm-install-prod
+.PHONY: install run test clean docker-build docker-run setup-db migrate
 
-up:
-	docker compose -f deploy/compose/docker-compose.yml up -d
+# Development
+install:
+	pip install -r requirements.txt
 
-down:
-	docker compose -f deploy/compose/docker-compose.yml down -v
+run:
+	uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 
-logs:
-	docker compose -f deploy/compose/docker-compose.yml logs -f
+run-prod:
+	uvicorn api.server:app --host 0.0.0.0 --port 8000
 
-helm-deps:
-	cd deploy/helm/umbrella && helm dependency update | cat
+# Database
+setup-db:
+	alembic upgrade head
 
-helm-render-dev:
-	helm template tetheritall deploy/helm/umbrella -n iot -f deploy/helm/umbrella/values-dev.yaml | cat
+migrate:
+	alembic revision --autogenerate -m "$(message)"
+	alembic upgrade head
 
-helm-render-prod:
-	helm template tetheritall deploy/helm/umbrella -n iot -f deploy/helm/umbrella/values-prod.yaml | cat
+# Testing
+test:
+	pytest tests/ -v
 
-helm-install-dev:
-	helm upgrade --install tetheritall deploy/helm/umbrella -n iot --create-namespace -f deploy/helm/umbrella/values-dev.yaml | cat
+test-coverage:
+	pytest tests/ --cov=. --cov-report=html
 
-helm-install-prod:
-	helm upgrade --install tetheritall deploy/helm/umbrella -n iot --create-namespace -f deploy/helm/umbrella/values-prod.yaml | cat
+# Docker
+docker-build:
+	docker build -t tetheritall .
+
+docker-run:
+	docker run -p 8000:8000 tetheritall
+
+# Cleanup
+clean:
+	find . -type f -name "*.pyc" -delete
+	find . -type d -name "__pycache__" -delete
+	rm -rf .pytest_cache
+	rm -rf htmlcov
+
+# Services
+run-redis:
+	docker run -d -p 6379:6379 --name redis redis:7-alpine
+
+run-nats:
+	docker run -d -p 4222:4222 --name nats nats:latest
+
+# Setup
+setup-local:
+	cp env.example .env
+	pip install -r requirements.txt
+	alembic upgrade head
+
+# Health checks
+health:
+	curl http://localhost:8000/health
+
+metrics:
+	curl http://localhost:8000/metrics
