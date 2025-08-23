@@ -8,16 +8,20 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   group('Onboarding Flow Integration Tests', () {
-    testWidgets('Complete onboarding flow', (WidgetTester tester) async {
+    testWidgets('Complete onboarding flow from start to finish', (tester) async {
       // Start the app
       app.main();
       await tester.pumpAndSettle();
 
-      // Verify onboarding screen is displayed
-      expect(find.text('Welcome to IoT Discovery!'), findsOneWidget);
+      // Verify we start on the onboarding screen
+      expect(find.text('IoT Discovery'), findsOneWidget);
+      expect(find.text('Setting up your experience...'), findsOneWidget);
 
-      // Navigate through tutorial steps
-      await _navigateThroughTutorial(tester);
+      // Wait for initialization to complete
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+
+      // Verify onboarding page is displayed
+      expect(find.byType(OnboardingPage), findsOneWidget);
 
       // Test device capture flow
       await _testDeviceCapture(tester);
@@ -25,281 +29,268 @@ void main() {
       // Test photo collection flow
       await _testPhotoCollection(tester);
 
-      // Test quest completion
+      // Test quest completion flow
       await _testQuestCompletion(tester);
 
-      // Complete onboarding
-      await _completeOnboarding(tester);
+      // Test achievement unlocking
+      await _testAchievementUnlocking(tester);
 
-      // Verify home screen is displayed
-      expect(find.text('Welcome to IoT Discovery!'), findsOneWidget);
-      expect(find.byType(FloatingActionButton), findsOneWidget);
+      // Test onboarding completion
+      await _testOnboardingCompletion(tester);
     });
 
-    testWidgets('Device capture with camera', (WidgetTester tester) async {
+    testWidgets('Onboarding with different device types', (tester) async {
+      // Start the app
       app.main();
       await tester.pumpAndSettle();
 
-      // Navigate to device capture step
-      await _navigateToStep(tester, 'device_capture');
+      // Wait for initialization
+      await tester.pumpAndSettle(const Duration(seconds: 3));
 
-      // Verify camera preview is displayed
-      expect(find.byType(CameraPreview), findsOneWidget);
+      // Test capturing different device types
+      final deviceTypes = ['light', 'thermostat', 'camera', 'speaker', 'lock'];
 
-      // Tap capture button
-      final captureButton = find.byIcon(Icons.camera_alt);
-      await tester.tap(captureButton);
-      await tester.pumpAndSettle();
-
-      // Verify device detection results
-      expect(find.text('Device Detected'), findsOneWidget);
-      expect(find.text('Confirm'), findsOneWidget);
-
-      // Confirm device capture
-      await tester.tap(find.text('Confirm'));
-      await tester.pumpAndSettle();
-
-      // Verify success celebration
-      expect(find.text('Device Captured!'), findsOneWidget);
-    });
-
-    testWidgets('Photo collection workflow', (WidgetTester tester) async {
-      app.main();
-      await tester.pumpAndSettle();
-
-      // Navigate to photo collection step
-      await _navigateToStep(tester, 'photo_collection');
-
-      // Take a photo
-      final captureButton = find.byIcon(Icons.camera_alt);
-      await tester.tap(captureButton);
-      await tester.pumpAndSettle();
-
-      // Fill photo details
-      await tester.enterText(find.byType(TextField).first, 'My First Collectible');
-      await tester.enterText(find.byType(TextField).at(1), 'A test photo collectible');
-
-      // Select tags
-      await tester.tap(find.text('device'));
-      await tester.tap(find.text('setup'));
-
-      // Collect photo
-      await tester.tap(find.text('Collect'));
-      await tester.pumpAndSettle();
-
-      // Verify collection success
-      expect(find.text('Photo Collected!'), findsOneWidget);
-    });
-
-    testWidgets('Quest completion flow', (WidgetTester tester) async {
-      app.main();
-      await tester.pumpAndSettle();
-
-      // Navigate to quest step
-      await _navigateToStep(tester, 'quest');
-
-      // Verify quest list is displayed
-      expect(find.text('Available Quests'), findsOneWidget);
-
-      // Start a quest
-      final startButton = find.text('Start Quest');
-      if (tester.any(startButton)) {
-        await tester.tap(startButton);
-        await tester.pumpAndSettle();
+      for (final deviceType in deviceTypes) {
+        await _testSpecificDeviceCapture(tester, deviceType);
       }
+    });
 
-      // Complete quest objective
-      final completeButton = find.text('Complete Quest');
-      if (tester.any(completeButton)) {
-        await tester.tap(completeButton);
-        await tester.pumpAndSettle();
+    testWidgets('Onboarding with photo collectibles', (tester) async {
+      // Start the app
+      app.main();
+      await tester.pumpAndSettle();
+
+      // Wait for initialization
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+
+      // Test different photo types
+      final photoTypes = [
+        'smart_home',
+        'device_photo',
+        'achievement_photo',
+        'rare_device',
+        'automation_setup',
+      ];
+
+      for (final photoType in photoTypes) {
+        await _testSpecificPhotoCollection(tester, photoType);
       }
-
-      // Verify quest completion
-      expect(find.text('Quest Completed!'), findsOneWidget);
     });
 
-    testWidgets('Achievement unlock flow', (WidgetTester tester) async {
+    testWidgets('Onboarding quest progression', (tester) async {
+      // Start the app
       app.main();
       await tester.pumpAndSettle();
 
-      // Perform actions that trigger achievements
-      // Capture first device
-      await _navigateToStep(tester, 'device_capture');
-      await _captureDevice(tester);
+      // Wait for initialization
+      await tester.pumpAndSettle(const Duration(seconds: 3));
 
-      // Verify achievement notification
-      expect(find.text('Achievement Unlocked!'), findsOneWidget);
-      expect(find.text('First Device'), findsOneWidget);
+      // Test quest progression
+      await _testQuestProgression(tester);
     });
 
-    testWidgets('Progress persistence across app restarts', (WidgetTester tester) async {
-      // Start app and make some progress
+    testWidgets('Onboarding error handling', (tester) async {
+      // Start the app
       app.main();
       await tester.pumpAndSettle();
 
-      // Capture a device
-      await _navigateToStep(tester, 'device_capture');
-      await _captureDevice(tester);
-
-      // Get current score
-      final scoreText = tester.widget<Text>(find.byIcon(Icons.star).evaluate().first.followedBy([find.byType(Text)]).first);
-      final initialScore = scoreText.data;
-
-      // Restart app (simulate app restart)
-      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-        'flutter/platform',
-        null,
-        (data) {},
-      );
-
-      app.main();
-      await tester.pumpAndSettle();
-
-      // Verify progress is restored
-      expect(find.text(initialScore!), findsOneWidget);
-    });
-
-    testWidgets('Offline mode functionality', (WidgetTester tester) async {
-      app.main();
-      await tester.pumpAndSettle();
-
-      // Simulate offline mode
-      // This would require network simulation capabilities
-
-      // Verify offline features still work
-      await _navigateToStep(tester, 'device_capture');
-      await _captureDevice(tester);
-
-      // Verify local storage works
-      expect(find.text('Device Captured!'), findsOneWidget);
-    });
-
-    testWidgets('Accessibility features', (WidgetTester tester) async {
-      app.main();
-      await tester.pumpAndSettle();
-
-      // Test semantic labels
-      expect(find.bySemanticsLabel('Progress indicator'), findsOneWidget);
-      expect(find.bySemanticsLabel('Current score'), findsOneWidget);
-
-      // Test high contrast mode
-      // This would require theme testing capabilities
-
-      // Test screen reader announcements
-      // This would require accessibility testing capabilities
+      // Test error scenarios
+      await _testErrorHandling(tester);
     });
   });
 }
 
-/// Helper function to navigate through tutorial steps
-Future<void> _navigateThroughTutorial(WidgetTester tester) async {
-  // Look for Next button and tap it repeatedly until we reach non-tutorial steps
-  while (tester.any(find.text('Next'))) {
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-    
-    // Check if we're still on a tutorial step
-    if (!tester.any(find.text('Next'))) break;
-  }
-}
-
-/// Helper function to navigate to a specific step
-Future<void> _navigateToStep(WidgetTester tester, String stepType) async {
-  // This would require more sophisticated navigation logic
-  // For now, we'll simulate clicking Next until we reach the desired step
-  int attempts = 0;
-  while (attempts < 10) {  // Prevent infinite loop
-    if (stepType == 'device_capture' && tester.any(find.byType(CameraPreview))) {
-      break;
-    } else if (stepType == 'photo_collection' && tester.any(find.text('Take a photo for your collection'))) {
-      break;
-    } else if (stepType == 'quest' && tester.any(find.text('Available Quests'))) {
-      break;
-    }
-    
-    if (tester.any(find.text('Next'))) {
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
-    } else {
-      break;
-    }
-    attempts++;
-  }
-}
-
-/// Helper function to test device capture
 Future<void> _testDeviceCapture(WidgetTester tester) async {
-  await _navigateToStep(tester, 'device_capture');
-  await _captureDevice(tester);
+  // Look for device capture section
+  expect(find.text('Device Capture'), findsOneWidget);
+
+  // Simulate device detection
+  await tester.tap(find.text('Capture Device'));
+  await tester.pumpAndSettle();
+
+  // Verify device capture dialog or form
+  expect(find.text('Device Details'), findsOneWidget);
+
+  // Fill in device information
+  await tester.enterText(find.byType(TextFormField).first, 'Smart Light Bulb');
+  await tester.enterText(find.byType(TextFormField).at(1), 'Philips');
+  await tester.enterText(find.byType(TextFormField).at(2), 'Hue White');
+
+  // Submit device capture
+  await tester.tap(find.text('Capture'));
+  await tester.pumpAndSettle();
+
+  // Verify success message
+  expect(find.text('Device Captured!'), findsOneWidget);
+  expect(find.text('+50 points'), findsOneWidget);
 }
 
-/// Helper function to capture a device
-Future<void> _captureDevice(WidgetTester tester) async {
-  // Tap capture button
-  final captureButton = find.byIcon(Icons.camera_alt);
-  if (tester.any(captureButton)) {
-    await tester.tap(captureButton);
-    await tester.pumpAndSettle();
-
-    // Confirm if confirmation is needed
-    if (tester.any(find.text('Confirm'))) {
-      await tester.tap(find.text('Confirm'));
-      await tester.pumpAndSettle();
-    }
-  }
-}
-
-/// Helper function to test photo collection
 Future<void> _testPhotoCollection(WidgetTester tester) async {
-  await _navigateToStep(tester, 'photo_collection');
-  
-  // Take photo
-  final captureButton = find.byIcon(Icons.camera_alt);
-  if (tester.any(captureButton)) {
-    await tester.tap(captureButton);
-    await tester.pumpAndSettle();
+  // Look for photo collection section
+  expect(find.text('Photo Collectibles'), findsOneWidget);
 
-    // Fill details
-    if (tester.any(find.byType(TextField))) {
-      await tester.enterText(find.byType(TextField).first, 'Test Photo');
-    }
+  // Simulate photo capture
+  await tester.tap(find.text('Take Photo'));
+  await tester.pumpAndSettle();
 
-    // Collect
-    if (tester.any(find.text('Collect'))) {
-      await tester.tap(find.text('Collect'));
-      await tester.pumpAndSettle();
-    }
-  }
+  // Verify photo capture interface
+  expect(find.text('Photo Details'), findsOneWidget);
+
+  // Fill in photo information
+  await tester.enterText(find.byType(TextFormField).first, 'My Smart Home');
+  await tester.enterText(find.byType(TextFormField).at(1), 'Beautiful smart home setup');
+
+  // Select photo type
+  await tester.tap(find.text('Smart Home'));
+  await tester.pumpAndSettle();
+
+  // Add tags
+  await tester.enterText(find.byType(TextFormField).at(2), 'smart_home, automation');
+
+  // Submit photo collection
+  await tester.tap(find.text('Collect'));
+  await tester.pumpAndSettle();
+
+  // Verify success message
+  expect(find.text('Photo Collected!'), findsOneWidget);
+  expect(find.text('+30 points'), findsOneWidget);
 }
 
-/// Helper function to test quest completion
 Future<void> _testQuestCompletion(WidgetTester tester) async {
-  await _navigateToStep(tester, 'quest');
-  
-  // Start and complete quest
-  if (tester.any(find.text('Start Quest'))) {
-    await tester.tap(find.text('Start Quest'));
-    await tester.pumpAndSettle();
-  }
-  
-  if (tester.any(find.text('Complete Quest'))) {
-    await tester.tap(find.text('Complete Quest'));
-    await tester.pumpAndSettle();
-  }
+  // Look for quests section
+  expect(find.text('Quests'), findsOneWidget);
+
+  // Find and start a quest
+  await tester.tap(find.text('First Device Quest'));
+  await tester.pumpAndSettle();
+
+  // Verify quest details
+  expect(find.text('Quest Details'), findsOneWidget);
+  expect(find.text('Capture your first IoT device'), findsOneWidget);
+
+  // Complete quest objective
+  await tester.tap(find.text('Complete Objective'));
+  await tester.pumpAndSettle();
+
+  // Verify quest completion
+  expect(find.text('Quest Completed!'), findsOneWidget);
+  expect(find.text('+100 points'), findsOneWidget);
 }
 
-/// Helper function to complete onboarding
-Future<void> _completeOnboarding(WidgetTester tester) async {
-  // Navigate through remaining steps
-  while (tester.any(find.text('Next'))) {
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-  }
-  
-  // Handle completion dialog
-  if (tester.any(find.text('Continue'))) {
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-  }
+Future<void> _testAchievementUnlocking(WidgetTester tester) async {
+  // Look for achievements section
+  expect(find.text('Achievements'), findsOneWidget);
+
+  // Verify achievement is unlocked
+  expect(find.text('First Device'), findsOneWidget);
+  expect(find.text('Unlocked'), findsOneWidget);
+
+  // Verify achievement notification
+  expect(find.text('Achievement Unlocked!'), findsOneWidget);
+  expect(find.text('+25 points'), findsOneWidget);
+}
+
+Future<void> _testOnboardingCompletion(WidgetTester tester) async {
+  // Look for completion button
+  expect(find.text('Complete Onboarding'), findsOneWidget);
+
+  // Complete onboarding
+  await tester.tap(find.text('Complete Onboarding'));
+  await tester.pumpAndSettle();
+
+  // Verify completion dialog
+  expect(find.text('Onboarding Complete!'), findsOneWidget);
+  expect(find.text('Congratulations!'), findsOneWidget);
+
+  // Continue to main app
+  await tester.tap(find.text('Continue'));
+  await tester.pumpAndSettle();
+
+  // Verify we're now on the home screen
+  expect(find.text('Welcome to IoT Discovery!'), findsOneWidget);
+  expect(find.text('Discover and manage your smart devices'), findsOneWidget);
+}
+
+Future<void> _testSpecificDeviceCapture(WidgetTester tester, String deviceType) async {
+  // Navigate to device capture
+  await tester.tap(find.text('Capture Device'));
+  await tester.pumpAndSettle();
+
+  // Fill device information
+  await tester.enterText(find.byType(TextFormField).first, 'Test $deviceType');
+  await tester.enterText(find.byType(TextFormField).at(1), 'TestBrand');
+  await tester.enterText(find.byType(TextFormField).at(2), 'TestModel');
+
+  // Select device type
+  await tester.tap(find.text('Device Type'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(deviceType));
+  await tester.pumpAndSettle();
+
+  // Capture device
+  await tester.tap(find.text('Capture'));
+  await tester.pumpAndSettle();
+
+  // Verify capture
+  expect(find.text('Device Captured!'), findsOneWidget);
+}
+
+Future<void> _testSpecificPhotoCollection(WidgetTester tester, String photoType) async {
+  // Navigate to photo collection
+  await tester.tap(find.text('Take Photo'));
+  await tester.pumpAndSettle();
+
+  // Fill photo information
+  await tester.enterText(find.byType(TextFormField).first, 'Test $photoType Photo');
+  await tester.enterText(find.byType(TextFormField).at(1), 'Test description');
+
+  // Select photo type
+  await tester.tap(find.text('Photo Type'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(photoType));
+  await tester.pumpAndSettle();
+
+  // Collect photo
+  await tester.tap(find.text('Collect'));
+  await tester.pumpAndSettle();
+
+  // Verify collection
+  expect(find.text('Photo Collected!'), findsOneWidget);
+}
+
+Future<void> _testQuestProgression(WidgetTester tester) async {
+  // Check initial quest state
+  expect(find.text('First Device Quest'), findsOneWidget);
+  expect(find.text('0/1'), findsOneWidget);
+
+  // Complete first objective
+  await tester.tap(find.text('First Device Quest'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Capture First Device'));
+  await tester.pumpAndSettle();
+
+  // Verify progress update
+  expect(find.text('1/1'), findsOneWidget);
+  expect(find.text('Completed'), findsOneWidget);
+
+  // Check next quest
+  expect(find.text('Photo Collector Quest'), findsOneWidget);
+  expect(find.text('0/3'), findsOneWidget);
+}
+
+Future<void> _testErrorHandling(WidgetTester tester) async {
+  // Test network error simulation
+  await tester.tap(find.text('Simulate Error'));
+  await tester.pumpAndSettle();
+
+  // Verify error message
+  expect(find.text('Connection Error'), findsOneWidget);
+  expect(find.text('Please check your internet connection'), findsOneWidget);
+
+  // Test retry functionality
+  await tester.tap(find.text('Retry'));
+  await tester.pumpAndSettle();
+
+  // Verify recovery
+  expect(find.text('Connection Error'), findsNothing);
 }

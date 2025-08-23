@@ -24,3 +24,13 @@ def register_all() -> None:
     except Exception:
         pass
 
+    try:
+        from tools.hue.adapters import HueSwitchAdapter, HueDimmableAdapter, HueColorControlAdapter
+
+        registry.register("hue", CapabilityType.SWITCHABLE, HueSwitchAdapter())
+        registry.register("hue", CapabilityType.DIMMABLE, HueDimmableAdapter())
+        registry.register("hue", CapabilityType.COLOR_CONTROL, HueColorControlAdapter())
+    except Exception:
+        # Hue adapters optional
+        pass
+

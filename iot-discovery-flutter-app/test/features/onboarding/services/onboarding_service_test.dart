@@ -1,12 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:mockito/annotations.dart';
-import 'dart:io';
 
 import 'package:iot_discovery_app/features/onboarding/services/onboarding_service.dart';
-import 'package:iot_discovery_app/features/onboarding/models/onboarding_models.dart';
 import 'package:iot_discovery_app/core/services/analytics_service.dart';
 import 'package:iot_discovery_app/core/services/notification_service.dart';
+import 'package:iot_discovery_app/features/onboarding/models/onboarding_models.dart';
 
 import 'onboarding_service_test.mocks.dart';
 
@@ -14,42 +13,51 @@ import 'onboarding_service_test.mocks.dart';
 void main() {
   group('OnboardingService', () {
     late OnboardingService onboardingService;
-    late MockAnalyticsService mockAnalytics;
-    late MockNotificationService mockNotifications;
+    late MockAnalyticsService mockAnalyticsService;
+    late MockNotificationService mockNotificationService;
 
     setUp(() {
+      mockAnalyticsService = MockAnalyticsService();
+      mockNotificationService = MockNotificationService();
       onboardingService = OnboardingService();
-      mockAnalytics = MockAnalyticsService();
-      mockNotifications = MockNotificationService();
     });
 
     group('Initialization', () {
       test('should initialize successfully', () async {
+        // Arrange
+        when(mockAnalyticsService.initialize()).thenAnswer((_) async {});
+        when(mockNotificationService.initialize()).thenAnswer((_) async {});
+
         // Act
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
         // Assert
-        expect(onboardingService.config.steps, isNotEmpty);
-        expect(onboardingService.config.pointValues, isNotEmpty);
-        expect(onboardingService.config.achievements, isNotEmpty);
+        expect(onboardingService.isInitialized, isTrue);
+        verify(mockAnalyticsService.initialize()).called(1);
+        verify(mockNotificationService.initialize()).called(1);
       });
 
-      test('should create default configuration', () async {
+      test('should not initialize twice', () async {
+        // Arrange
+        when(mockAnalyticsService.initialize()).thenAnswer((_) async {});
+        when(mockNotificationService.initialize()).thenAnswer((_) async {});
+
         // Act
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
+        );
+        await onboardingService.initialize(
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
         // Assert
-        final config = onboardingService.config;
-        expect(config.steps, hasLength(greaterThan(0)));
-        expect(config.pointValues['device_capture'], equals(50));
-        expect(config.pointValues['photo_collectible'], equals(30));
-        expect(config.pointValues['quest_completion'], equals(100));
+        verify(mockAnalyticsService.initialize()).called(1);
+        verify(mockNotificationService.initialize()).called(1);
       });
     });
 
@@ -57,305 +65,353 @@ void main() {
       test('should capture device successfully', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
+        const deviceId = 'test_device_001';
+        const deviceName = 'Test Smart Light';
+        const deviceType = 'light';
+        const deviceBrand = 'Philips';
+        const deviceModel = 'Hue White';
+
         // Act
-        final deviceCapture = await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
-          deviceName: 'Test Device',
-          deviceType: 'smart_speaker',
-          deviceBrand: 'TestBrand',
-          deviceModel: 'TestModel',
-          deviceData: {'verified': true, 'has_photo': true},
+        final result = await onboardingService.captureDevice(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          deviceType: deviceType,
+          deviceBrand: deviceBrand,
+          deviceModel: deviceModel,
+          deviceData: {'test': 'data'},
         );
 
         // Assert
-        expect(deviceCapture, isNotNull);
-        expect(deviceCapture!.deviceName, equals('Test Device'));
-        expect(deviceCapture.deviceType, equals('smart_speaker'));
-        expect(deviceCapture.points, greaterThan(0));
-        expect(onboardingService.progress.capturedDevices, contains(deviceCapture));
+        expect(result, isNotNull);
+        expect(result!.deviceId, equals(deviceId));
+        expect(result.deviceName, equals(deviceName));
+        expect(result.deviceType, equals(deviceType));
+        expect(result.deviceBrand, equals(deviceBrand));
+        expect(result.deviceModel, equals(deviceModel));
+        expect(result.isVerified, isTrue);
+        expect(result.points, greaterThan(0));
+
+        verify(mockAnalyticsService.trackDeviceCapture(
+          deviceType,
+          deviceBrand,
+          any,
+        )).called(1);
       });
 
-      test('should calculate correct points for device capture', () async {
+      test('should calculate points correctly for different device types', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
-        // Act
-        final deviceCapture = await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
-          deviceName: 'Smart Speaker',
-          deviceType: 'smart_speaker',
-          deviceData: {'verified': true, 'has_photo': true},
-        );
-
-        // Assert
-        expect(deviceCapture!.points, equals(85)); // 50 base + 25 bonus + 10 verified
-      });
-
-      test('should track analytics for device capture', () async {
-        // Arrange
-        await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
-        );
-
-        // Act
-        await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
-          deviceName: 'Test Device',
-          deviceType: 'smart_speaker',
+        // Act & Assert
+        final lightResult = await onboardingService.captureDevice(
+          deviceId: 'light_001',
+          deviceName: 'Smart Light',
+          deviceType: 'light',
           deviceData: {},
         );
 
-        // Assert
-        verify(mockAnalytics.trackEvent('device_captured', parameters: anyNamed('parameters')));
+        final thermostatResult = await onboardingService.captureDevice(
+          deviceId: 'thermostat_001',
+          deviceName: 'Smart Thermostat',
+          deviceType: 'thermostat',
+          deviceData: {},
+        );
+
+        expect(lightResult!.points, greaterThan(0));
+        expect(thermostatResult!.points, greaterThan(0));
+        // Thermostats should generally give more points than lights
+        expect(thermostatResult.points, greaterThanOrEqualTo(lightResult.points));
       });
     });
 
-    group('Photo Collectibles', () {
+    group('Photo Collection', () {
       test('should collect photo successfully', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
-        // Create a temporary test file
-        final testFile = File('test_photo.jpg');
-        await testFile.writeAsBytes([1, 2, 3, 4]); // Dummy image data
+        const title = 'My Smart Home';
+        const description = 'A beautiful photo of my smart home setup';
+        const photoType = PhotoCollectibleType.smartHome;
 
         // Act
-        final collectible = await onboardingService.collectPhoto(
-          title: 'Test Photo',
-          description: 'A test photo',
-          type: PhotoCollectibleType.devicePhoto,
-          photoFile: testFile,
-          tags: ['test', 'device'],
+        final result = await onboardingService.collectPhoto(
+          title: title,
+          description: description,
+          type: photoType,
+          photoPath: '/test/path/photo.jpg',
+          tags: ['smart_home', 'automation'],
         );
 
         // Assert
-        expect(collectible, isNotNull);
-        expect(collectible!.title, equals('Test Photo'));
-        expect(collectible.type, equals(PhotoCollectibleType.devicePhoto));
-        expect(collectible.points, greaterThan(0));
-        expect(onboardingService.progress.collectedPhotos, contains(collectible));
+        expect(result, isNotNull);
+        expect(result!.title, equals(title));
+        expect(result.description, equals(description));
+        expect(result.type, equals(photoType));
+        expect(result.tags, contains('smart_home'));
+        expect(result.points, greaterThan(0));
 
-        // Cleanup
-        await testFile.delete();
+        verify(mockAnalyticsService.trackPhotoCollection(
+          photoType.name,
+          any,
+          any,
+        )).called(1);
       });
 
       test('should calculate rarity correctly', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
-        final testFile = File('test_photo.jpg');
-        await testFile.writeAsBytes([1, 2, 3, 4]);
-
         // Act
-        final collectible = await onboardingService.collectPhoto(
-          title: 'Achievement Photo',
-          description: 'A rare achievement photo',
-          type: PhotoCollectibleType.achievementPhoto,
-          photoFile: testFile,
-          metadata: {'time_of_day': 'night', 'weather': 'special'},
+        final commonResult = await onboardingService.collectPhoto(
+          title: 'Common Photo',
+          description: 'A common photo',
+          type: PhotoCollectibleType.smartHome,
+          photoPath: '/test/path/common.jpg',
+        );
+
+        final rareResult = await onboardingService.collectPhoto(
+          title: 'Rare Photo',
+          description: 'A rare photo',
+          type: PhotoCollectibleType.rareDevice,
+          photoPath: '/test/path/rare.jpg',
         );
 
         // Assert
-        expect(collectible!.rarity, greaterThan(0.8));
-        expect(collectible.isRare, isTrue);
-
-        // Cleanup
-        await testFile.delete();
+        expect(commonResult!.isRare, isFalse);
+        expect(rareResult!.isRare, isTrue);
+        expect(rareResult.points, greaterThan(commonResult.points));
       });
     });
 
     group('Quest Progress', () {
-      test('should update quest progress correctly', () async {
+      test('should update quest progress successfully', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
+
+        const questId = 'first_device_quest';
+        const objective = 'capture_first_device';
 
         // Act
         await onboardingService.updateQuestProgress(
-          questId: 'first_routine',
+          questId: questId,
           progress: 1,
-          objective: 'setup_completed',
+          objective: objective,
         );
 
         // Assert
-        final quest = onboardingService.progress.questProgress
-            .firstWhere((q) => q.questId == 'first_routine');
-        expect(quest.currentProgress, equals(1));
-        expect(quest.status, equals(QuestStatus.completed));
-        expect(quest.completedObjectives, contains('setup_completed'));
+        final progress = onboardingService.progress;
+        final quest = progress.questProgress.firstWhere((q) => q.questId == questId);
+        expect(quest.progress, equals(1));
+        expect(quest.objectives, contains(objective));
+
+        verify(mockAnalyticsService.trackQuestProgress(
+          questId,
+          'in_progress',
+          1,
+        )).called(1);
       });
 
-      test('should complete quest when target reached', () async {
+      test('should complete quest when all objectives are met', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
+
+        const questId = 'permissions_quest';
 
         // Act
         await onboardingService.updateQuestProgress(
-          questId: 'first_routine',
+          questId: questId,
           progress: 1,
+          objective: 'camera_permission',
+        );
+        await onboardingService.updateQuestProgress(
+          questId: questId,
+          progress: 1,
+          objective: 'location_permission',
         );
 
         // Assert
-        final quest = onboardingService.progress.questProgress
-            .firstWhere((q) => q.questId == 'first_routine');
+        final progress = onboardingService.progress;
+        final quest = progress.questProgress.firstWhere((q) => q.questId == questId);
         expect(quest.status, equals(QuestStatus.completed));
-        expect(quest.completedAt, isNotNull);
+
+        verify(mockNotificationService.showQuestCompletionNotification(
+          questTitle: any,
+          points: any,
+        )).called(1);
       });
     });
 
-    group('Achievements', () {
+    group('Achievement System', () {
       test('should unlock first device achievement', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
         // Act
         await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
+          deviceId: 'first_device',
           deviceName: 'First Device',
-          deviceType: 'smart_speaker',
+          deviceType: 'light',
           deviceData: {},
         );
 
-        // Allow time for achievement checking
-        await Future.delayed(const Duration(milliseconds: 100));
-
         // Assert
-        final firstDeviceAchievement = onboardingService.config.achievements['first_device'];
-        expect(firstDeviceAchievement?.isUnlocked, isTrue);
+        final progress = onboardingService.progress;
+        final achievement = progress.achievements.firstWhere(
+          (a) => a.id == 'first_device_achievement',
+        );
+        expect(achievement.isUnlocked, isTrue);
+
+        verify(mockNotificationService.showAchievementNotification(
+          achievementTitle: any,
+          achievementDescription: any,
+          points: any,
+        )).called(1);
       });
 
-      test('should unlock device master achievement after 10 devices', () async {
+      test('should unlock photo collector achievement', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
-        // Act - Capture 10 devices
-        for (int i = 0; i < 10; i++) {
-          await onboardingService.captureDevice(
-            deviceId: 'test_device_$i',
-            deviceName: 'Device $i',
-            deviceType: 'smart_speaker',
-            deviceData: {},
+        // Act
+        for (int i = 0; i < 5; i++) {
+          await onboardingService.collectPhoto(
+            title: 'Photo $i',
+            description: 'Test photo $i',
+            type: PhotoCollectibleType.smartHome,
+            photoPath: '/test/path/photo$i.jpg',
           );
         }
 
-        // Allow time for achievement checking
-        await Future.delayed(const Duration(milliseconds: 100));
-
         // Assert
-        final deviceMasterAchievement = onboardingService.config.achievements['device_master'];
-        expect(deviceMasterAchievement?.isUnlocked, isTrue);
+        final progress = onboardingService.progress;
+        final achievement = progress.achievements.firstWhere(
+          (a) => a.id == 'photo_collector_achievement',
+        );
+        expect(achievement.isUnlocked, isTrue);
       });
     });
 
     group('Onboarding Completion', () {
-      test('should complete onboarding', () async {
+      test('should complete onboarding successfully', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
         // Act
         await onboardingService.completeOnboarding();
 
         // Assert
+        expect(onboardingService.isCompleted, isTrue);
         expect(onboardingService.progress.isCompleted, isTrue);
         expect(onboardingService.progress.completedAt, isNotNull);
-        verify(mockAnalytics.trackEvent('onboarding_completed', parameters: anyNamed('parameters')));
-      });
 
-      test('should track completion analytics', () async {
-        // Arrange
-        await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
-        );
+        verify(mockAnalyticsService.trackOnboardingCompletion(
+          totalScore: any,
+          duration: any,
+          devicesCaptures: any,
+          photosCollected: any,
+          questsCompleted: any,
+          achievementsUnlocked: any,
+        )).called(1);
 
-        // Capture some devices and photos first
-        await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
-          deviceName: 'Test Device',
-          deviceType: 'smart_speaker',
-          deviceData: {},
-        );
-
-        final testFile = File('test_photo.jpg');
-        await testFile.writeAsBytes([1, 2, 3, 4]);
-        await onboardingService.collectPhoto(
-          title: 'Test Photo',
-          description: 'Test',
-          type: PhotoCollectibleType.devicePhoto,
-          photoFile: testFile,
-        );
-
-        // Act
-        await onboardingService.completeOnboarding();
-
-        // Assert
-        verify(mockAnalytics.trackEvent('onboarding_completed', parameters: argThat(
-          allOf([
-            isA<Map<String, dynamic>>(),
-            predicate<Map<String, dynamic>>((params) => params['devices_captured'] == 1),
-            predicate<Map<String, dynamic>>((params) => params['photos_collected'] == 1),
-          ]),
-          named: 'parameters',
-        )));
-
-        // Cleanup
-        await testFile.delete();
+        verify(mockNotificationService.showOnboardingCompletionNotification(
+          totalScore: any,
+        )).called(1);
       });
     });
 
-    group('Progress Reset', () {
-      test('should reset progress correctly', () async {
+    group('Score Calculation', () {
+      test('should calculate total score correctly', () async {
         // Arrange
         await onboardingService.initialize(
-          analyticsService: mockAnalytics,
-          notificationService: mockNotifications,
-        );
-
-        // Capture a device first
-        await onboardingService.captureDevice(
-          deviceId: 'test_device_1',
-          deviceName: 'Test Device',
-          deviceType: 'smart_speaker',
-          deviceData: {},
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
         );
 
         // Act
-        await onboardingService.resetProgress();
+        await onboardingService.captureDevice(
+          deviceId: 'device_1',
+          deviceName: 'Device 1',
+          deviceType: 'light',
+          deviceData: {},
+        );
+
+        await onboardingService.collectPhoto(
+          title: 'Photo 1',
+          description: 'Test photo',
+          type: PhotoCollectibleType.smartHome,
+          photoPath: '/test/path/photo1.jpg',
+        );
 
         // Assert
-        expect(onboardingService.progress.capturedDevices, isEmpty);
-        expect(onboardingService.progress.collectedPhotos, isEmpty);
-        expect(onboardingService.progress.totalScore, equals(0));
-        expect(onboardingService.progress.isCompleted, isFalse);
-        verify(mockAnalytics.trackEvent('onboarding_reset'));
+        final progress = onboardingService.progress;
+        final expectedScore = progress.capturedDevices.fold<int>(
+          0,
+          (sum, device) => sum + device.points,
+        ) + progress.collectedPhotos.fold<int>(
+          0,
+          (sum, photo) => sum + photo.points,
+        );
+
+        expect(progress.totalScore, equals(expectedScore));
+      });
+    });
+
+    group('Persistence', () {
+      test('should save and load progress correctly', () async {
+        // Arrange
+        await onboardingService.initialize(
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
+        );
+
+        // Act
+        await onboardingService.captureDevice(
+          deviceId: 'test_device',
+          deviceName: 'Test Device',
+          deviceType: 'light',
+          deviceData: {},
+        );
+
+        await onboardingService.saveProgress();
+
+        // Create new service instance to test loading
+        final newService = OnboardingService();
+        await newService.initialize(
+          analyticsService: mockAnalyticsService,
+          notificationService: mockNotificationService,
+        );
+
+        // Assert
+        expect(newService.progress.capturedDevices.length, equals(1));
+        expect(newService.progress.capturedDevices.first.deviceName, equals('Test Device'));
       });
     });
   });

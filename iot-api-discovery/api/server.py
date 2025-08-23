@@ -27,6 +27,7 @@ from tools.hue.remote import list_resources as hue_list
 from tools.openhab.local import list_items as oh_list, send_command as oh_cmd
 from tools.zwave.zwave_js_ws import ping_version as zwjs_version, get_nodes as zwjs_nodes, set_value as zwjs_set_value
 from api.alexa_webhook import router as alexa_router
+from api.hue_commissioning import router as hue_commissioning_router
 from tools.smartthings.oauth import build_auth_url as st_auth_url, exchange_code_for_token as st_exchange
 from tools.tuya.oauth import build_auth_url as tuya_auth_url
 from libs.capabilities.register_providers import register_all as register_capability_adapters
@@ -44,6 +45,16 @@ from tools.llm.guard import LLMGuard
 from tools.energy.ocpi_client import OCPIClient
 from api.middleware import request_id_and_logging_middleware
 from tools.events.bus import bus
+
+# Performance enhancements
+from api.performance_middleware import (
+    performance_middleware, 
+    enhanced_rate_limiter, 
+    performance_monitor,
+    RateLimitConfig,
+    CircuitBreakerConfig
+)
+from services.cache.enhanced_cache import enhanced_cache, CacheConfig, CacheLayer
 
 # Optional OpenTelemetry setup
 try:
@@ -132,6 +143,11 @@ def create_app() -> FastAPI:
     app.middleware("http")(request_id_and_logging_middleware)
     app.add_middleware(PrometheusMiddleware)
     app.add_route("/metrics", handle_metrics)
+    
+    # Add performance monitoring middleware
+    @app.middleware("http")
+    async def performance_monitoring_middleware(request: Request, call_next):
+        return await performance_monitor(request, call_next)
 
     # Request timing middleware with exemplars
     if _request_hist is not None:
@@ -159,17 +175,8 @@ def create_app() -> FastAPI:
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
     async def rate_limiter(request: Request):
-        # simple in-memory rate limiter per client IP
-        key = f"rl:{request.client.host}"
-        now = int(time.time())
-        window = now // 60
-        store = getattr(app.state, "rate_store", {})
-        app.state.rate_store = store
-        count = store.get((key, window), 0)
-        limit = settings.rate_limit_requests_per_minute
-        if count >= limit:
-            raise HTTPException(status_code=429, detail="rate limit exceeded")
-        store[(key, window)] = count + 1
+        # Enhanced rate limiting with Redis support
+        await enhanced_rate_limiter(request)
 
     async def require_api_key(api_key: str | None = Depends(api_key_header)):
         if settings.api_token and api_key != settings.api_token:
@@ -177,6 +184,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_start() -> None:
+        # Initialize performance middleware
+        await performance_middleware.initialize()
+        
+        # Initialize enhanced cache
+        await enhanced_cache.initialize()
+        
         await coordinator.start()
         await engine.start()
         # Register capability adapters (optional/no-op if not available)
@@ -189,14 +202,64 @@ def create_app() -> FastAPI:
     async def on_stop() -> None:
         await coordinator.stop()
         await engine.stop()
+        
+        # Stop performance components
+        await enhanced_cache.stop()
 
     app.include_router(alexa_router)
     app.include_router(st_events_router)
     app.include_router(st_sub_router)
+    app.include_router(hue_commissioning_router)
 
     @app.get("/events/health")
     async def events_health() -> Dict[str, Any]:
         return bus.health()
+
+    # Performance monitoring endpoints
+    @app.get("/performance/health")
+    async def performance_health() -> Dict[str, Any]:
+        """Get performance system health status."""
+        return {
+            "rate_limiter": {
+                "enabled": True,
+                "redis_connected": performance_middleware.rate_limiter.redis_client is not None
+            },
+            "cache": enhanced_cache.get_stats(),
+            "circuit_breakers": {
+                name: {
+                    "state": cb.state,
+                    "failure_count": cb.failure_count,
+                    "last_failure_time": cb.last_failure_time
+                }
+                for name, cb in performance_middleware.circuit_breakers.items()
+            },
+            "connection_pools": {
+                name: {
+                    "active_connections": pool.active_connections,
+                    "max_connections": pool.config.max_connections
+                }
+                for name, pool in performance_middleware.connection_pools.items()
+            }
+        }
+
+    @app.get("/performance/metrics")
+    async def performance_metrics() -> Dict[str, Any]:
+        """Get detailed performance metrics."""
+        return {
+            "cache_stats": enhanced_cache.get_stats(),
+            "rate_limiter_stats": {
+                "local_buckets": len(performance_middleware.rate_limiter.local_buckets),
+                "redis_connected": performance_middleware.rate_limiter.redis_client is not None
+            },
+            "circuit_breaker_stats": {
+                name: {
+                    "state": cb.state,
+                    "failure_count": cb.failure_count,
+                    "success_count": cb.success_count
+                }
+                for name, cb in performance_middleware.circuit_breakers.items()
+            }
+        }
 
     @app.post("/scan/device", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def start_scan(req: ScanRequest) -> Dict[str, Any]:
@@ -211,13 +274,25 @@ def create_app() -> FastAPI:
 
     @app.get("/tasks/{task_id}", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def task_status(task_id: str) -> Dict[str, Any]:
-        return coordinator.get_task_status(task_id)
+        # Use enhanced cache for task status
+        cache_key = f"task_status:{task_id}"
+        return await enhanced_cache.get_or_set(
+            cache_key,
+            lambda: coordinator.get_task_status(task_id),
+            ttl=30,  # Cache for 30 seconds
+            cache_layer=CacheLayer.L1
+        )
 
     @app.post("/tasks/{task_id}/cancel", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
     async def cancel_task(task_id: str) -> Dict[str, Any]:
         # Soft cancel: mark as cancelled; workers check status (future work)
         # For now, just update state for visibility
         await asyncio.to_thread(coordinator._update_task_state, task_id, "cancelled")
+        
+        # Invalidate cache
+        cache_key = f"task_status:{task_id}"
+        await enhanced_cache.delete(cache_key, CacheLayer.L1)
+        
         return {"ok": True}
 
     @app.post("/tasks/{task_id}/pause", dependencies=[Depends(rate_limiter), Depends(require_api_key)])
