@@ -1,0 +1,59 @@
+# Mobile integration values for Suggestion Engine
+replicaCount: 2
+
+image:
+  repository: ghcr.io/tethralai/tetheritall-suggestion
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+serviceAccountName: "suggestion-sa"
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8300"
+  prometheus.io/path: "/metrics"
+
+service:
+  port: 8300
+
+resources:
+  requests:
+    cpu: 300m
+    memory: 384Mi
+  limits:
+    cpu: 1500m
+    memory: 1.5Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 15
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+env:
+  REDIS_URL: redis://redis:6379/0
+  LOG_LEVEL: INFO
+  MAX_COMBINATIONS: "1500"
+  TIME_BUDGET_MS: "6000"
+  LLM_ENABLED: "false"
+  MOBILE_ENABLED: "true"
+  PUSH_NOTIFICATIONS_ENABLED: "true"
+  OFFLINE_CACHE_ENABLED: "true"
+  DEVICE_REGISTRATION_ENABLED: "true"
+  NOTIFICATION_RATE_LIMIT: "10"
+  OFFLINE_CACHE_TTL_HOURS: "24"
+
+# Mobile-specific secrets
+secrets:
+  encryptionKey: "mobile-encryption-key-change-me"
+  firebaseCredentials: "CHANGE_ME_FIREBASE_CREDENTIALS"
+  apnsKey: "CHANGE_ME_APNS_KEY"
+  fcmServerKey: "CHANGE_ME_FCM_SERVER_KEY"
+  jwtSecret: "mobile-jwt-secret-change-me"
+  rateLimitSecret: "mobile-rate-limit-secret"
+
+# Global values
+global:
+  redisUrl: redis://redis:6379/0
+  otelExporter: http://otel-collector.iot.svc.cluster.local:4318

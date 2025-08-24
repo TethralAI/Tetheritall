@@ -1,0 +1,65 @@
+# Default values for suggestion service
+replicaCount: 2
+
+image:
+  repository: tethral/suggestion-engine
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imageDigest: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+
+service:
+  port: 8300
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+env:
+  REDIS_URL: redis://redis:6379/0
+  LOG_LEVEL: INFO
+  MAX_COMBINATIONS: "1000"
+  TIME_BUDGET_MS: "5000"
+  LLM_ENABLED: "false"
+
+# Secrets configuration
+secrets:
+  encryptionKey: "default-encryption-key-change-me"
+  llmApiKey: ""
+  firebaseCredentials: ""
+  apnsKey: ""
+  databasePassword: ""
+  jwtSecret: "default-jwt-secret-change-me"
+  rateLimitSecret: "default-rate-limit-secret"
+
+# Ingress configuration
+ingress:
+  enabled: false
+  domain: "tethral.ai"
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+
+# Global values (inherited from umbrella chart)
+global:
+  redisUrl: redis://redis:6379/0
+  otelExporter: http://otel-collector.iot.svc.cluster.local:4318

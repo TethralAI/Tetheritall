@@ -1,0 +1,48 @@
+{{- if .Values.monitoring.enabled | default true }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "suggestion.fullname" . }}-dashboard
+  labels:
+    {{- include "suggestion.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  suggestion-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Suggestion Engine Dashboard",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(suggestion_requests_total[5m])",
+                "legendFormat": "requests/sec"
+              }
+            ]
+          },
+          {
+            "title": "Response Time",
+            "type": "graph", 
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(suggestion_response_time_seconds_bucket[5m]))",
+                "legendFormat": "95th percentile"
+              }
+            ]
+          },
+          {
+            "title": "Error Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(suggestion_errors_total[5m])",
+                "legendFormat": "errors/sec"
+              }
+            ]
+          }
+        ]
+      }
+    }
+{{- end }}

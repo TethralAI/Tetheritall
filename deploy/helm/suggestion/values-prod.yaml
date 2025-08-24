@@ -1,0 +1,63 @@
+# Production values for Suggestion Engine
+replicaCount: 3
+
+image:
+  repository: ghcr.io/tethralai/tetheritall-suggestion
+  tag: "v1.0.0"
+  pullPolicy: Always
+
+serviceAccountName: "suggestion-sa"
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8300"
+  prometheus.io/path: "/metrics"
+  checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+
+service:
+  port: 8300
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+env:
+  REDIS_URL: redis://redis-cluster:6379/0
+  LOG_LEVEL: INFO
+  MAX_COMBINATIONS: "2000"
+  TIME_BUDGET_MS: "8000"
+  LLM_ENABLED: "true"
+  ENVIRONMENT: "production"
+  METRICS_ENABLED: "true"
+  TRACING_ENABLED: "true"
+
+# Production secrets (should be provided via external secret management)
+secrets:
+  encryptionKey: "CHANGE_ME_IN_PRODUCTION"
+  llmApiKey: "CHANGE_ME_IN_PRODUCTION"
+  firebaseCredentials: "CHANGE_ME_IN_PRODUCTION"
+  apnsKey: "CHANGE_ME_IN_PRODUCTION"
+  databasePassword: "CHANGE_ME_IN_PRODUCTION"
+  jwtSecret: "CHANGE_ME_IN_PRODUCTION"
+  rateLimitSecret: "CHANGE_ME_IN_PRODUCTION"
+
+# Service account configuration for AWS IAM roles
+serviceAccount:
+  annotations:
+    roleArn: "arn:aws:iam::ACCOUNT_ID:role/suggestion-service-role"
+
+# Global values
+global:
+  redisUrl: redis://redis-cluster:6379/0
+  otelExporter: http://otel-collector.iot.svc.cluster.local:4318

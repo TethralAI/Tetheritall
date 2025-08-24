@@ -1,0 +1,155 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-backup
+  namespace: iot
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: backup-sa
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Starting database backup..."
+              
+              # Create backup directory
+              mkdir -p /backup/$(date +%Y%m%d)
+              
+              # Backup PostgreSQL
+              pg_dump -h postgres -U postgres -d tethral > /backup/$(date +%Y%m%d)/database_$(date +%Y%m%d_%H%M%S).sql
+              
+              # Compress backup
+              gzip /backup/$(date +%Y%m%d)/database_$(date +%Y%m%d_%H%M%S).sql
+              
+              # Upload to S3 (if configured)
+              if [ -n "$S3_BUCKET" ]; then
+                aws s3 cp /backup/$(date +%Y%m%d)/database_$(date +%Y%m%d_%H%M%S).sql.gz s3://$S3_BUCKET/backups/database/
+              fi
+              
+              echo "Database backup completed successfully"
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: S3_BUCKET
+              value: "tethral-backups"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: iot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backup-storage
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-sa
+  namespace: iot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-role
+  namespace: iot
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["get", "list", "create"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-role-binding
+  namespace: iot
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backup-role
+subjects:
+- kind: ServiceAccount
+  name: backup-sa
+  namespace: iot
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: config-backup
+  namespace: iot
+spec:
+  schedule: "0 3 * * *"  # Daily at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: backup-sa
+          containers:
+          - name: config-backup
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Starting configuration backup..."
+              
+              # Create backup directory
+              mkdir -p /backup/config/$(date +%Y%m%d)
+              
+              # Backup ConfigMaps
+              kubectl get configmaps -n iot -o yaml > /backup/config/$(date +%Y%m%d)/configmaps_$(date +%Y%m%d_%H%M%S).yaml
+              
+              # Backup Secrets (without sensitive data)
+              kubectl get secrets -n iot -o yaml > /backup/config/$(date +%Y%m%d)/secrets_$(date +%Y%m%d_%H%M%S).yaml
+              
+              # Backup Deployments
+              kubectl get deployments -n iot -o yaml > /backup/config/$(date +%Y%m%d)/deployments_$(date +%Y%m%d_%H%M%S).yaml
+              
+              # Backup Services
+              kubectl get services -n iot -o yaml > /backup/config/$(date +%Y%m%d)/services_$(date +%Y%m%d_%H%M%S).yaml
+              
+              # Compress backup
+              tar -czf /backup/config/$(date +%Y%m%d)/config_$(date +%Y%m%d_%H%M%S).tar.gz -C /backup/config/$(date +%Y%m%d) .
+              
+              echo "Configuration backup completed successfully"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure

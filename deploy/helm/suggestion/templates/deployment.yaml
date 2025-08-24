@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "suggestion.fullname" . }}
+  labels:
+    {{- include "suggestion.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "suggestion.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "suggestion.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "suggestion.serviceAccountName" . }}
+      priorityClassName: app-standard
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["suggestion"]
+                topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "suggestion.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: suggestion
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          # Using the proper entrypoint from Dockerfile
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          env:
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-db-url
+                  key: DATABASE_URL
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.global.otelExporter | quote }}
+            - name: SUGGESTION_ENGINE_LOG_LEVEL
+              value: {{ .Values.env.LOG_LEVEL | default "INFO" | quote }}
+            - name: SUGGESTION_ENGINE_MAX_COMBINATIONS
+              value: {{ .Values.env.MAX_COMBINATIONS | default "1000" | quote }}
+            - name: SUGGESTION_ENGINE_TIME_BUDGET_MS
+              value: {{ .Values.env.TIME_BUDGET_MS | default "5000" | quote }}
+            - name: SUGGESTION_ENGINE_LLM_ENABLED
+              value: {{ .Values.env.LLM_ENABLED | default "false" | quote }}
+            - name: SUGGESTION_ENGINE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: encryption-key
+            - name: SUGGESTION_ENGINE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: jwt-secret
+            - name: SUGGESTION_ENGINE_RATE_LIMIT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: rate-limit-secret
+            - name: SUGGESTION_ENGINE_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: llm-api-key
+                  optional: true
+            - name: SUGGESTION_ENGINE_FIREBASE_CREDENTIALS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: firebase-credentials
+                  optional: true
+            - name: SUGGESTION_ENGINE_APNS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suggestion.fullname" . }}-secrets
+                  key: apns-key
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "200m" | quote }}
+              memory: {{ .Values.resources.requests.memory | default "256Mi" | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "1000m" | quote }}
+              memory: {{ .Values.resources.limits.memory | default "1Gi" | quote }}
+          volumeMounts:
+            - name: suggestion-config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: suggestion-config
+          configMap:
+            name: {{ include "suggestion.fullname" . }}-config

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: suggestion
+description: Tethral Suggestion Engine - AI-powered device and service combination recommendations
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - iot
+  - automation
+  - suggestions
+  - ai
+home: https://github.com/tethralai/tetheritall
+sources:
+  - https://github.com/tethralai/tetheritall
+maintainers:
+  - name: Tethral Team
+    email: team@tethral.ai

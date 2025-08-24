@@ -1,0 +1,104 @@
+{{- if .Values.monitoring.enabled | default true }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "suggestion.fullname" . }}-monitor
+  labels:
+    {{- include "suggestion.labels" . | nindent 4 }}
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      {{- include "suggestion.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'suggestion_.*'
+          action: keep
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "suggestion.fullname" . }}-alerts
+  labels:
+    {{- include "suggestion.labels" . | nindent 4 }}
+    release: prometheus
+spec:
+  groups:
+    - name: suggestion-engine
+      rules:
+        # High error rate alert
+        - alert: SuggestionEngineHighErrorRate
+          expr: rate(suggestion_errors_total[5m]) > 0.1
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate in Suggestion Engine"
+            description: "Suggestion Engine is experiencing high error rate"
+        
+        # High response time alert
+        - alert: SuggestionEngineHighResponseTime
+          expr: histogram_quantile(0.95, rate(suggestion_response_time_seconds_bucket[5m])) > 2
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High response time in Suggestion Engine"
+            description: "95th percentile response time is high"
+        
+        # Service down alert
+        - alert: SuggestionEngineDown
+          expr: up{app="suggestion"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Suggestion Engine is down"
+            description: "Suggestion Engine service is not responding"
+        
+        # High CPU usage alert
+        - alert: SuggestionEngineHighCPU
+          expr: container_cpu_usage_seconds_total{container="suggestion"} / container_spec_cpu_quota{container="suggestion"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage in Suggestion Engine"
+            description: "CPU usage is above 80% for 5 minutes"
+        
+        # High memory usage alert
+        - alert: SuggestionEngineHighMemory
+          expr: container_memory_usage_bytes{container="suggestion"} / container_spec_memory_limit_bytes{container="suggestion"} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage in Suggestion Engine"
+            description: "Memory usage is above 80% for 5 minutes"
+        
+        # Low suggestion generation rate
+        - alert: SuggestionEngineLowGenerationRate
+          expr: rate(suggestion_combinations_generated[5m]) < 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Low suggestion generation rate"
+            description: "Suggestion generation rate is below 1 per second"
+        
+        # LLM service issues
+        - alert: SuggestionEngineLLMIssues
+          expr: rate(suggestion_llm_calls_total{status="error"}[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LLM service experiencing issues"
+            description: "LLM error rate is above 5%"
+{{- end }}

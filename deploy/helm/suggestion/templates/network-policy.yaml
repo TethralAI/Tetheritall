@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "suggestion.fullname" . }}-network-policy
+  labels:
+    {{- include "suggestion.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "suggestion.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from API Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: iot
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    # Allow health checks
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow HTTPS to external services (LLM APIs, etc.)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow internal service communication
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: iot
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 6379  # Redis
+        - protocol: TCP
+          port: 4318  # OpenTelemetry
+    # Deny all other egress traffic
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 65535

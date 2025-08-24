@@ -1,79 +1,143 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cert-manager
+  template:
+    metadata:
+      labels:
+        app: cert-manager
+    spec:
+      serviceAccountName: cert-manager
+      containers:
+      - name: cert-manager
+        image: quay.io/jetstack/cert-manager-controller:v1.12.0
+        args:
+        - --v=2
+        - --cluster-resource-namespace=$(POD_NAMESPACE)
+        - --leader-election-namespace=$(POD_NAMESPACE)
+        - --dns01-recursive-nameservers=8.8.8.8:53,1.1.1.1:53
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - containerPort: 9402
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: 9402
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9402
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cert-manager-controller-issuers
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["issuers", "clusterissuers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["issuers/status", "clusterissuers/status"]
+  verbs: ["update"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "certificaterequests"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates/status", "certificaterequests/status"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingwebhookconfigurations"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cert-manager-controller-issuers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-issuers
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  ports:
+  - port: 9402
+    targetPort: 9402
+  selector:
+    app: cert-manager
+---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: selfsigned-issuer
+  name: letsencrypt-prod
 spec:
-  selfSigned: {}
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: iot-root-ca
-  namespace: iot
-spec:
-  isCA: true
-  commonName: iot-root-ca
-  secretName: iot-root-ca
-  issuerRef:
-    name: selfsigned-issuer
-    kind: ClusterIssuer
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@tethral.ai
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: iot-ca-issuer
+  name: letsencrypt-staging
 spec:
-  ca:
-    secretName: iot-root-ca
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: api-cert
-  namespace: iot
-spec:
-  secretName: api-tls
-  dnsNames:
-    - api.example.local
-  issuerRef:
-    name: iot-ca-issuer
-    kind: ClusterIssuer
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gateway-cert
-  namespace: iot
-spec:
-  secretName: gateway-tls
-  dnsNames:
-    - gateway.example.local
-  issuerRef:
-    name: iot-ca-issuer
-    kind: ClusterIssuer
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: integrations-cert
-  namespace: iot
-spec:
-  secretName: integrations-tls
-  dnsNames:
-    - integrations.example.local
-  issuerRef:
-    name: iot-ca-issuer
-    kind: ClusterIssuer
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gateway-client-cert
-  namespace: iot
-spec:
-  secretName: gateway-client-tls
-  commonName: gateway-client
-  usages: [ "client auth" ]
-  issuerRef:
-    name: iot-ca-issuer
-    kind: ClusterIssuer
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@tethral.ai
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+    - http01:
+        ingress:
+          class: nginx

@@ -47,3 +47,13 @@ gateway:
     INTEGRATIONS_BASE_URL: http://integrations.iot.svc.cluster.local:8100
   image: ghcr.io/tethralai/tetheritall-gateway:latest
   replicaCount: 2
+
+suggestion:
+  env:
+    REDIS_URL: redis://redis:6379/0
+    LOG_LEVEL: INFO
+    MAX_COMBINATIONS: "1000"
+    TIME_BUDGET_MS: "5000"
+    LLM_ENABLED: "false"
+  image: ghcr.io/tethralai/tetheritall-suggestion:latest
+  replicaCount: 2
