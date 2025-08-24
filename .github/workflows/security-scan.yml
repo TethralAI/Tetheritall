@@ -1,0 +1,137 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for better scanning
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety detect-secrets
+        npm install -g snyk
+    
+    - name: Run Bandit (Python security linter)
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f txt -o bandit-report.txt || true
+    
+    - name: Run Safety (Python dependency vulnerability scanner)
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check --output safety-report.txt || true
+    
+    - name: Run Detect Secrets
+      run: |
+        detect-secrets scan --baseline .secrets.baseline || true
+        detect-secrets audit .secrets.baseline --report --json audit-report.json || true
+    
+    - name: Run Snyk (dependency vulnerability scanner)
+      run: |
+        snyk test --json-file-output=snyk-report.json || true
+        snyk monitor || true
+    
+    - name: Run TruffleHog (secrets scanner)
+      run: |
+        docker run --rm -v "${{ github.workspace }}:/pwd" trufflesecurity/trufflehog:latest \
+          --only-verified --format json --output-file trufflehog-report.json || true
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          bandit-report.txt
+          safety-report.json
+          safety-report.txt
+          audit-report.json
+          snyk-report.json
+          trufflehog-report.json
+    
+    - name: Comment on PR with security findings
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🔒 Security Scan Results\n\n';
+          
+          // Check for security issues
+          const reports = [
+            { name: 'Bandit', file: 'bandit-report.json' },
+            { name: 'Safety', file: 'safety-report.json' },
+            { name: 'Snyk', file: 'snyk-report.json' },
+            { name: 'TruffleHog', file: 'trufflehog-report.json' }
+          ];
+          
+          let hasIssues = false;
+          
+          for (const report of reports) {
+            try {
+              if (fs.existsSync(report.file)) {
+                const data = JSON.parse(fs.readFileSync(report.file, 'utf8'));
+                if (data && (data.results || data.vulnerabilities || data.findings)) {
+                  hasIssues = true;
+                  comment += `### ⚠️ ${report.name} found issues\n`;
+                  comment += `Check the uploaded artifacts for details.\n\n`;
+                }
+              }
+            } catch (e) {
+              // Report not found or invalid
+            }
+          }
+          
+          if (!hasIssues) {
+            comment += '✅ No security issues detected!\n\n';
+          }
+          
+          comment += '📋 **Security Reports:** Check the uploaded artifacts for detailed reports.\n';
+          comment += '🔍 **Manual Review:** Always review code changes for potential security issues.\n';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+    
+    - name: Fail on critical security issues
+      run: |
+        # Check if any critical issues were found
+        if [ -f bandit-report.json ]; then
+          CRITICAL_ISSUES=$(jq '.results[] | select(.issue_severity == "HIGH") | .issue_text' bandit-report.json | wc -l)
+          if [ "$CRITICAL_ISSUES" -gt 0 ]; then
+            echo "❌ Found $CRITICAL_ISSUES critical security issues"
+            exit 1
+          fi
+        fi
+        
+        if [ -f trufflehog-report.json ]; then
+          SECRETS_FOUND=$(jq '.VerifiedResults | length' trufflehog-report.json)
+          if [ "$SECRETS_FOUND" -gt 0 ]; then
+            echo "❌ Found $SECRETS_FOUND verified secrets"
+            exit 1
+          fi
+        fi
+        
+        echo "✅ No critical security issues found"

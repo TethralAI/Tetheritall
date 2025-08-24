@@ -264,3 +264,9 @@ docker-compose.override.yaml
 *.backup
 *.old
 *.orig
+
+# Large binary files
+*.exe
+*.zip
+eksctl.zip
+terraform.exe
