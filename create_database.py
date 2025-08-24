@@ -8,7 +8,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 def create_database():
     # Connection string for defaultdb (existing database)
-    default_conn_string = "postgresql://john:***REMOVED***@playground-15066.j77.aws-us-east-2.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+    default_conn_string = os.getenv('DATABASE_URL', 'postgresql://username:password@host:port/defaultdb?sslmode=verify-full')
     
     try:
         # Connect to defaultdb

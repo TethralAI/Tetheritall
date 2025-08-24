@@ -6,7 +6,7 @@ Script to create database tables directly using psycopg2.
 import psycopg2
 
 def create_tables():
-    conn_string = "postgresql://john:***REMOVED***@playground-15066.j77.aws-us-east-2.cockroachlabs.cloud:26257/tetheritall?sslmode=verify-full"
+    conn_string = os.getenv('DATABASE_URL', 'postgresql://username:password@host:port/tetheritall?sslmode=verify-full')
     
     try:
         print("Connecting to CockroachDB...")

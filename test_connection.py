@@ -9,7 +9,15 @@ from sqlalchemy import create_engine, text
 
 def test_connection():
     # Test direct psycopg2 connection
-    conn_string = "postgresql://john:***REMOVED***@playground-15066.j77.aws-us-east-2.cockroachlabs.cloud:26257/tetheritall?sslmode=verify-full"
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    conn_string = os.getenv('DATABASE_URL')
+    
+    if not conn_string:
+        print("Error: DATABASE_URL not found in environment variables")
+        return False
     
     try:
         print("Testing direct psycopg2 connection...")
@@ -31,7 +39,19 @@ def test_connection():
 
 def create_tables_sqlalchemy():
     # Test SQLAlchemy connection
-    conn_string = "postgresql+psycopg2://john:***REMOVED***@playground-15066.j77.aws-us-east-2.cockroachlabs.cloud:26257/tetheritall?sslmode=verify-full"
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    conn_string = os.getenv('DATABASE_URL')
+    
+    if not conn_string:
+        print("Error: DATABASE_URL not found in environment variables")
+        return False
+    
+    # Convert to SQLAlchemy format if needed
+    if conn_string.startswith('postgresql://'):
+        conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg2://', 1)
     
     try:
         print("Testing SQLAlchemy connection...")

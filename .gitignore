@@ -197,3 +197,70 @@ yarn-error.log*
 # Local configuration
 config.local.*
 settings.local.*
+
+# Security & Credentials
+*.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
+credentials.ini
+secrets.json
+secrets.yaml
+secrets.yml
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.p8
+*.mobileprovision
+*.cer
+
+# Database credentials
+database.ini
+db.ini
+connection.ini
+postgres.ini
+mysql.ini
+
+# API Keys & Tokens
+api_keys.txt
+tokens.txt
+keys.txt
+*.key
+*.token
+
+# AWS
+.aws/
+aws.ini
+aws.json
+aws.yaml
+aws.yml
+
+# Azure
+azure.ini
+azure.json
+azure.yaml
+azure.yml
+
+# Google Cloud
+gcp.ini
+gcp.json
+gcp.yaml
+gcp.yml
+service-account*.json
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
