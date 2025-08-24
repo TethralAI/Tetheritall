@@ -38,13 +38,26 @@ function Write-Error {
 # Function to check AWS credentials
 function Test-AWSCredentials {
     Write-Info "Checking AWS credentials..."
+    
+    # Check if environment variables are set (for CI/CD)
+    if ($env:AWS_ACCESS_KEY_ID -and $env:AWS_SECRET_ACCESS_KEY) {
+        Write-Info "Using AWS credentials from environment variables"
+        $env:AWS_DEFAULT_REGION = if ($env:AWS_DEFAULT_REGION) { $env:AWS_DEFAULT_REGION } else { "us-east-1" }
+    }
+    else {
+        Write-Info "Using AWS credentials from ~/.aws/credentials file"
+    }
+    
     try {
         $identity = aws sts get-caller-identity --output json | ConvertFrom-Json
         Write-Success "AWS credentials valid for user: $($identity.Arn)"
         return $true
     }
     catch {
-        Write-Error "AWS credentials not valid"
+        Write-Error "AWS credentials not valid. Please check your ~/.aws/credentials file or environment variables."
+        Write-Info "To set up credentials:"
+        Write-Info "1. Create ~/.aws/credentials file with your AWS keys"
+        Write-Info "2. Or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables"
         return $false
     }
 }
@@ -65,8 +78,8 @@ function Test-EKSCluster {
     }
 }
 
-# Function to deploy using AWS Console approach
-function Deploy-ViaAWSConsole {
+# Function to start deployment using AWS Console approach
+function Start-ViaAWSConsole {
     Write-Info "Setting up deployment for AWS Console..."
     
     # Create deployment manifests
@@ -217,8 +230,8 @@ function Show-Status {
     Write-Host "AWS Console → EKS → tethral-cluster → Launch kubectl"
 }
 
-# Function to cleanup
-function Cleanup-Deployment {
+# Function to remove deployment files
+function Remove-Deployment {
     Write-Info "Cleaning up deployment files..."
     
     if (Test-Path "deploy/namespace.yaml") {
@@ -245,7 +258,7 @@ switch ($Command) {
         Write-Info "Starting quick deployment..."
         if (Test-AWSCredentials) {
             if (Test-EKSCluster) {
-                Deploy-ViaAWSConsole
+                Start-ViaAWSConsole
             } else {
                 Write-Error "Cannot access EKS cluster. Please check permissions."
             }
@@ -257,7 +270,7 @@ switch ($Command) {
         Show-Status
     }
     "cleanup" {
-        Cleanup-Deployment
+        Remove-Deployment
     }
     default {
         Write-Error "Unknown command: $Command"

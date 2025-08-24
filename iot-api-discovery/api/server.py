@@ -28,6 +28,7 @@ from tools.openhab.local import list_items as oh_list, send_command as oh_cmd
 from tools.zwave.zwave_js_ws import ping_version as zwjs_version, get_nodes as zwjs_nodes, set_value as zwjs_set_value
 from api.alexa_webhook import router as alexa_router
 from api.hue_commissioning import router as hue_commissioning_router
+from api.device_discovery_api import router as device_discovery_router
 from tools.smartthings.oauth import build_auth_url as st_auth_url, exchange_code_for_token as st_exchange
 from tools.tuya.oauth import build_auth_url as tuya_auth_url
 from libs.capabilities.register_providers import register_all as register_capability_adapters
@@ -210,6 +211,7 @@ def create_app() -> FastAPI:
     app.include_router(st_events_router)
     app.include_router(st_sub_router)
     app.include_router(hue_commissioning_router)
+    app.include_router(device_discovery_router)
 
     @app.get("/events/health")
     async def events_health() -> Dict[str, Any]:

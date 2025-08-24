@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iot-api-discovery
+  namespace: tethral
+  labels:
+    app: iot-api-discovery
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: iot-api-discovery
+  template:
+    metadata:
+      labels:
+        app: iot-api-discovery
+        tier: backend
+    spec:
+      containers:
+      - name: iot-api-discovery
+        image: tethral/iot-api-discovery:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: redis-url
+        - name: API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: api-secret
+              key: api-token
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-secret
+              key: access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-secret
+              key: secret-access-key
+        - name: AWS_REGION
+          value: "us-east-1"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: iot-api-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iot-api-discovery
+  namespace: tethral
+  labels:
+    app: iot-api-discovery
+    tier: backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: iot-api-discovery
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iot-api-config
+  namespace: tethral
+data:
+  settings.yaml: |
+    outbound_allowlist: "*"
+    api_token: "${API_TOKEN}"
+    database_url: "${DATABASE_URL}"
+    redis_url: "${REDIS_URL}"
+    aws_region: "us-east-1"
+    log_level: "INFO"

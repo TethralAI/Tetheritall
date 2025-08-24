@@ -1,0 +1,105 @@
+# Tethral Terraform Variables Example
+# Copy this file to terraform.tfvars and customize for your environment
+
+# Basic Configuration
+aws_region    = "us-east-1"
+environment   = "dev"  # dev, staging, prod
+cluster_name  = ""     # Leave empty to auto-generate
+
+# EKS Configuration
+cluster_version         = "1.29"
+node_instance_types     = ["t3.medium", "t3.large"]
+node_desired_capacity   = 3
+node_min_capacity       = 1
+node_max_capacity       = 10
+
+# Database Configuration
+db_instance_class             = "db.t3.micro"    # Use db.r5.large for production
+db_allocated_storage          = 20               # GB
+db_max_allocated_storage      = 100              # GB
+db_backup_retention_period    = 7                # days
+db_backup_window             = "03:00-04:00"
+db_maintenance_window        = "sun:04:00-sun:05:00"
+
+# Redis Configuration
+redis_node_type           = "cache.t3.micro"     # Use cache.r5.large for production
+redis_num_cache_nodes     = 1
+redis_parameter_group_name = "default.redis7"
+redis_port               = 6379
+
+# Application Configuration
+app_image_tag        = "latest"
+app_replicas         = 2
+app_cpu_request      = "200m"
+app_memory_request   = "256Mi"
+app_cpu_limit        = "1000m"
+app_memory_limit     = "1Gi"
+
+# Storage Configuration
+s3_bucket_prefix                = "tethral"
+enable_s3_versioning           = true
+s3_lifecycle_transition_days   = 30
+s3_lifecycle_expiration_days   = 365
+
+# Monitoring Configuration
+enable_cloudwatch_logs = true
+log_retention_days     = 14
+enable_prometheus      = true
+enable_grafana         = true
+
+# Security Configuration
+allowed_cidr_blocks        = ["0.0.0.0/0"]  # CHANGE THIS FOR PRODUCTION!
+enable_encryption          = true
+kms_key_deletion_window    = 7
+
+# Domain and SSL Configuration (optional)
+domain_name          = ""    # your-domain.com
+certificate_arn      = ""    # ACM certificate ARN
+create_route53_zone  = false
+
+# Cost Optimization
+enable_nat_gateway     = true
+single_nat_gateway     = true   # Set to false for HA in production
+enable_spot_instances  = false  # Set to true for cost savings
+spot_instance_types    = ["t3.medium", "t3.large", "t3.xlarge"]
+
+# Backup Configuration
+enable_automated_backups = true
+backup_schedule         = "0 2 * * *"  # Daily at 2 AM
+
+# Feature Flags
+enable_vpn_gateway      = false
+enable_dns_hostnames    = true
+enable_dns_support      = true
+
+# Example Production Configuration (uncomment and modify for production):
+
+# Production EKS
+# cluster_version         = "1.29"
+# node_instance_types     = ["m5.large", "m5.xlarge"]
+# node_desired_capacity   = 6
+# node_min_capacity       = 3
+# node_max_capacity       = 20
+
+# Production Database
+# db_instance_class             = "db.r5.xlarge"
+# db_allocated_storage          = 100
+# db_max_allocated_storage      = 1000
+# db_backup_retention_period    = 30
+
+# Production Redis
+# redis_node_type           = "cache.r5.large"
+# redis_num_cache_nodes     = 3
+
+# Production Security
+# allowed_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12"]  # Your corporate networks
+# enable_encryption   = true
+
+# Production High Availability
+# single_nat_gateway = false
+# enable_spot_instances = false
+
+# Production Monitoring
+# log_retention_days = 90
+# enable_prometheus = true
+# enable_grafana = true

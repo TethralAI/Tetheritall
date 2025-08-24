@@ -1,0 +1,18 @@
+﻿# Tethral Application Deployment Configuration
+Environment: dev
+Region: us-east-1
+ALB_DNS_NAME: tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com
+VPC_ID: vpc-022c92cf9c85bab05
+S3_BUCKET: tethral-dev-app-storage-2rym42fc
+TARGET_GROUP_ARN: arn:aws:elasticloadbalancing:us-east-1:864981720875:targetgroup/tethral-dev-tg/0a8a1c34ad6ae089
+
+# API Endpoints Available:
+# - GET http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/health
+# - GET http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/discovery/devices
+# - GET http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/devices/{device_id}
+# - POST http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/devices/register
+# - GET http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/devices/{device_id}/capabilities
+# - POST http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/orchestration/plan
+# - GET http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/orchestration/plan/{plan_id}
+# - POST http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/orchestration/execute/{plan_id}
+# - POST http://tethral-dev-alb-117782138.us-east-1.elb.amazonaws.com/api/edge/ml/infer
